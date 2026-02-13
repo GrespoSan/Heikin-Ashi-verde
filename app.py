@@ -9,51 +9,57 @@ from datetime import date, timedelta
 # PAGE CONFIG
 # --------------------------------------------------
 st.set_page_config(
-    page_title="HA Trend Scanner",
+    page_title="HA Scanner",
     page_icon="🕯️",
     layout="wide"
 )
 
-st.title("📊 Scanner Inversione Heikin Ashi")
-st.markdown("Cerca: **Ieri VERDE** (HA Close > HA Open) e **Altro Ieri ROSSA** (HA Close < HA Open)")
+st.title("📊 Heikin Ashi Trend Scanner")
+st.markdown("**Segnale:** Ieri VERDE (HA) e Altro Ieri ROSSA (HA)")
 
 # --------------------------------------------------
 # SIDEBAR
 # --------------------------------------------------
 st.sidebar.header("⚙️ Configurazione")
-tf_choice = st.sidebar.selectbox("Timeframe", ["Daily", "Weekly"])
+
+# Selezione Timeframe
+tf_choice = st.sidebar.selectbox("Seleziona Timeframe", ["Daily", "Weekly"])
 tf_map = {"Daily": "1d", "Weekly": "1wk"}
 
+# Ripristino caricamento file TXT
 DEFAULT_SYMBOLS = [
-    "NQ=F", "ES=F", "YM=F", "RTY=F", "CL=F", "RB=F", "NG=F", "GC=F", 
-    "SI=F", "HG=F", "BTC=F", "ETH=F", "DX-Y.NYB", "6E=F", "6B=F"
+    "NQ=F", "ES=F", "YM=F", "RTY=F", "^GDAXI", "CL=F", "RB=F", "GC=F", "BTC=F"
 ]
 
-symbols = DEFAULT_SYMBOLS # Semplificato per brevità, puoi rimettere l'uploader se serve.
+uploaded_file = st.sidebar.file_uploader("📁 Carica file TXT con simboli", type=["txt"])
+
+if uploaded_file:
+    symbols = uploaded_file.read().decode("utf-8").replace(",", "\n").split()
+    symbols = [s.strip().upper() for s in symbols if s.strip()]
+else:
+    symbols = DEFAULT_SYMBOLS
 
 # --------------------------------------------------
-# HEIKIN ASHI CALCULATION (FORMULA PRECISA)
+# HEIKIN ASHI CALCULATION
 # --------------------------------------------------
 def get_heikin_ashi(df):
-    ha_df = df.copy()
+    ha_df = pd.DataFrame(index=df.index)
     
-    # 1. HA Close = (O + H + L + C) / 4
+    # HA Close = (O + H + L + C) / 4
     ha_df['Close'] = (df['Open'] + df['High'] + df['Low'] + df['Close']) / 4
     
-    # 2. HA Open = (Open_prev + Close_prev) / 2
-    # Usiamo un loop perché ogni riga dipende dalla precedente
+    # HA Open = (Open_prev + Close_prev) / 2
     ha_open = np.zeros(len(df))
     ha_open[0] = (df['Open'].iloc[0] + df['Close'].iloc[0]) / 2
-    
     for i in range(1, len(df)):
         ha_open[i] = (ha_open[i-1] + ha_df['Close'].iloc[i-1]) / 2
     ha_df['Open'] = ha_open
     
-    # 3. HA High = max(High, HA_Open, HA_Close)
-    ha_df['High'] = ha_df[['High', 'Open', 'Close']].max(axis=1)
+    # HA High = max(High, HA_Open, HA_Close)
+    ha_df['High'] = pd.concat([df['High'], ha_df['Open'], ha_df['Close']], axis=1).max(axis=1)
     
-    # 4. HA Low = min(Low, HA_Open, HA_Close)
-    ha_df['Low'] = ha_df[['Low', 'Open', 'Close']].min(axis=1)
+    # HA Low = min(Low, HA_Open, HA_Close)
+    ha_df['Low'] = pd.concat([df['Low'], ha_df['Open'], ha_df['Close']], axis=1).min(axis=1)
     
     return ha_df
 
@@ -62,77 +68,87 @@ def get_heikin_ashi(df):
 # --------------------------------------------------
 @st.cache_data
 def fetch_data(symbol, interval):
-    try:
-        data = yf.download(symbol, period="1y", interval=interval, progress=False, auto_adjust=False)
-        if data.empty: return None
-        if isinstance(data.columns, pd.MultiIndex):
-            data.columns = data.columns.get_level_values(0)
-        return data.dropna()
-    except:
+    end = date.today() + timedelta(days=1)
+    days_back = 400 if interval == "1wk" else 200
+    start = end - timedelta(days=days_back)
+    
+    df = yf.download(symbol, start=start, end=end, interval=interval, progress=False, auto_adjust=False)
+    
+    if df is None or df.empty:
         return None
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+    
+    return df.dropna()
 
 # --------------------------------------------------
 # ANALYSIS
 # --------------------------------------------------
 def analyze_stock(symbol):
     data = fetch_data(symbol, tf_map[tf_choice])
-    if data is None or len(data) < 5:
+    if data is None or len(data) < 10:
         return None
 
-    # Calcolo HA
+    # Calcolo candele Heikin Ashi
     ha_data = get_heikin_ashi(data)
     
-    # Prendiamo le ultime due candele CHIUSE (escludendo quella in corso se il mercato è aperto)
-    # Spesso yfinance include la candela "Live" come ultima riga.
-    # Per sicurezza prendiamo le candele chiuse:
-    ieri = ha_data.iloc[-2]
-    altro_ieri = ha_data.iloc[-3]
+    # Candela di IERI (ultima riga) e ALTRO IERI (penultima)
+    ieri = ha_data.iloc[-1]
+    altro_ieri = ha_data.iloc[-2]
 
-    # Condizioni Colore
+    # Condizione: Ieri Verde (C > O) e Altro Ieri Rossa (C < O)
     ieri_verde = ieri['Close'] > ieri['Open']
     altro_ieri_rossa = altro_ieri['Close'] < altro_ieri['Open']
 
     if ieri_verde and altro_ieri_rossa:
         return {
             "Symbol": symbol,
-            "Data Ieri": ieri.name.date(),
-            "HA_Open_Ieri": round(ieri['Open'], 4),
-            "HA_Close_Ieri": round(ieri['Close'], 4),
-            "DataFrame": data,
-            "HA_DataFrame": ha_data
+            "Segnale": "🟢 Inversione Bullish HA",
+            "Data": ieri.name,
+            "HA_Data": ha_data
         }
     return None
 
 # --------------------------------------------------
-# RUN & DISPLAY
+# EXECUTION
 # --------------------------------------------------
 results = []
-with st.spinner("Scansione in corso..."):
+with st.spinner(f"Scansione {tf_choice} in corso..."):
     for s in symbols:
-        res = analyze_stock(s)
-        if res:
-            results.append(res)
+        r = analyze_stock(s)
+        if r:
+            results.append(r)
 
+# --------------------------------------------------
+# DISPLAY
+# --------------------------------------------------
 if results:
-    st.success(f"Trovati {len(results)} segnali!")
-    st.table(pd.DataFrame(results)[["Symbol", "Data Ieri", "HA_Open_Ieri", "HA_Close_Ieri"]])
+    df_results = pd.DataFrame(results)[["Symbol", "Segnale", "Data"]]
+    df_results["Data"] = df_results["Data"].dt.strftime("%d/%m/%Y")
+    st.table(df_results)
     
-    selected = st.selectbox("Dettaglio Grafico:", [r["Symbol"] for r in results])
-    sel_data = next(r for r in results if r["Symbol"] == selected)
+    st.divider()
+    selected = st.selectbox("Seleziona simbolo per il grafico HA:", [r["Symbol"] for r in results])
+    sel = next(r for r in results if r["Symbol"] == selected)
     
-    # Visualizzazione Grafica
-    fig = go.Figure()
-    # Mostriamo solo le ultime 30 candele per chiarezza
-    d_plot = sel_data["HA_DataFrame"].tail(30)
+    # Grafico con Candele Heikin Ashi
+    d_plot = sel["HA_Data"].tail(40) # Ultime 40 candele HA
     
-    fig.add_trace(go.Candlestick(
+    fig = go.Figure(data=[go.Candlestick(
         x=d_plot.index,
-        open=d_plot['Open'], high=d_plot['High'],
-        low=d_plot['Low'], close=d_plot['Close'],
-        name="Heikin Ashi"
-    ))
-    
-    fig.update_layout(title=f"Analisi HA: {selected}", xaxis_rangeslider_visible=False)
+        open=d_plot['Open'],
+        high=d_plot['High'],
+        low=d_plot['Low'],
+        close=d_plot['Close'],
+        name="Candele Heikin Ashi"
+    )])
+
+    fig.update_layout(
+        title=f"Grafico HEIKIN ASHI - {selected}",
+        xaxis_rangeslider_visible=False,
+        height=600,
+        yaxis_title="Prezzo HA"
+    )
     st.plotly_chart(fig, use_container_width=True)
 else:
-    st.warning("Nessun segnale trovato con i criteri: Altro Ieri ROSSA -> Ieri VERDE.")
+    st.info("Nessun segnale trovato con i criteri Heikin Ashi.")
