@@ -3,19 +3,15 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-from datetime import date, timedelta
+from datetime import date
 
 # --------------------------------------------------
 # PAGE CONFIG
 # --------------------------------------------------
-st.set_page_config(
-    page_title="HA Trend Scanner",
-    page_icon="🕯️",
-    layout="wide"
-)
+st.set_page_config(page_title="HA Trend Scanner", page_icon="🕯️", layout="wide")
 
 st.title("📊 Scanner Inversione Heikin Ashi")
-st.markdown("Cerca: **Inversione Colore** (Verde preceduta da Rossa)")
+st.info("💡 DI DOMENICA: Usa la modalità 'Live (Oggi vs Ieri)' per analizzare il Venerdì.")
 
 # --------------------------------------------------
 # SIDEBAR
@@ -24,22 +20,17 @@ st.sidebar.header("⚙️ Configurazione")
 tf_choice = st.sidebar.selectbox("Timeframe", ["Daily", "Weekly"])
 tf_map = {"Daily": "1d", "Weekly": "1wk"}
 
-# --- TOGGLE AGGIUNTO ---
+# TOGGLE PER GLI INDICI
 st.sidebar.divider()
 analisi_mode = st.sidebar.radio(
     "Seleziona Periodo:",
-    ["Ieri vs Altro Ieri", "Oggi vs Ieri"],
-    help="Ieri vs Altro Ieri usa gli indici [-2] e [-3]. Oggi vs Ieri usa [-1] e [-2]."
+    ["Classica ([-2] vs [-3])", "Live ([-1] vs [-2])"],
+    help="Usa Classica nei giorni feriali. Usa Live nel weekend o se vuoi il segnale di oggi."
 )
 
-# --- CARICAMENTO FILE TXT ---
-DEFAULT_SYMBOLS = [
-    "NQ=F", "ES=F", "YM=F", "RTY=F", "CL=F", "RB=F", "NG=F", "GC=F", 
-    "SI=F", "HG=F", "BTC=F", "ETH=F", "DX-Y.NYB", "6E=F", "6B=F"
-]
-
-uploaded_file = st.sidebar.file_uploader("📁 Carica file TXT con simboli", type=["txt"])
-
+# CARICAMENTO FILE TXT
+DEFAULT_SYMBOLS = ["NQ=F", "ES=F", "YM=F", "CL=F", "RB=F", "GC=F", "BTC=F"]
+uploaded_file = st.sidebar.file_uploader("📁 Carica file TXT", type=["txt"])
 if uploaded_file:
     content = uploaded_file.read().decode("utf-8")
     symbols = content.replace(",", "\n").split()
@@ -48,7 +39,7 @@ else:
     symbols = DEFAULT_SYMBOLS
 
 # --------------------------------------------------
-# HEIKIN ASHI CALCULATION (LA TUA LOGICA)
+# HEIKIN ASHI (LA TUA LOGICA ORIGINALE)
 # --------------------------------------------------
 def get_heikin_ashi(df):
     ha_df = df.copy()
@@ -63,7 +54,7 @@ def get_heikin_ashi(df):
     return ha_df
 
 # --------------------------------------------------
-# DATA FETCH (LA TUA LOGICA)
+# DATA FETCH
 # --------------------------------------------------
 @st.cache_data
 def fetch_data(symbol, interval):
@@ -73,82 +64,54 @@ def fetch_data(symbol, interval):
         if isinstance(data.columns, pd.MultiIndex):
             data.columns = data.columns.get_level_values(0)
         return data.dropna()
-    except:
-        return None
+    except: return None
 
 # --------------------------------------------------
 # ANALYSIS (ADATTATA COL TOGGLE)
 # --------------------------------------------------
 def analyze_stock(symbol):
     data = fetch_data(symbol, tf_map[tf_choice])
-    if data is None or len(data) < 5:
-        return None
-
+    if data is None or len(data) < 10: return None
     ha_data = get_heikin_ashi(data)
     
-    # Selezione indici in base al toggle
-    if analisi_mode == "Ieri vs Altro Ieri":
-        idx_rec = -2
-        idx_prev = -3
-        label_rec = "Ieri"
-        label_prev = "Altro Ieri"
+    # SELEZIONE INDICI
+    if analisi_mode == "Classica ([-2] vs [-3])":
+        idx_rec, idx_prev = -2, -3
     else:
-        idx_rec = -1
-        idx_prev = -2
-        label_rec = "Oggi"
-        label_prev = "Ieri"
+        idx_rec, idx_prev = -1, -2
 
-    candela_rec = ha_data.iloc[idx_rec]
-    candela_prev = ha_data.iloc[idx_prev]
+    c_rec, c_prev = ha_data.iloc[idx_rec], ha_data.iloc[idx_prev]
 
-    # Condizioni Colore
-    verde = candela_rec['Close'] > candela_rec['Open']
-    rossa = candela_prev['Close'] < candela_prev['Open']
-
-    if verde and rossa:
+    # CONDIZIONE: VERDE dopo ROSSA
+    if (c_rec['Close'] > c_rec['Open']) and (c_prev['Close'] < c_prev['Open']):
         return {
             "Symbol": symbol,
-            f"Data {label_prev}": candela_prev.name.strftime("%d/%m/%Y"),
-            f"HA Open ({label_prev})": round(candela_prev['Open'], 4),
-            f"HA Close ({label_prev})": round(candela_prev['Close'], 4),
-            f"Data {label_rec}": candela_rec.name.strftime("%d/%m/%Y"),
-            f"HA Open ({label_rec})": round(candela_rec['Open'], 4),
-            f"HA Close ({label_rec})": round(candela_rec['Close'], 4),
+            "Data Prec (Rossa)": c_prev.name.strftime("%d/%m/%Y"),
+            "Data Rec (Verde)": c_rec.name.strftime("%d/%m/%Y"),
+            "HA_Open_Rec": round(c_rec['Open'], 4),
+            "HA_Close_Rec": round(c_rec['Close'], 4),
             "HA_DataFrame": ha_data
         }
     return None
 
 # --------------------------------------------------
-# RUN & DISPLAY
+# RUN
 # --------------------------------------------------
 results = []
-with st.spinner(f"Scansione {analisi_mode}..."):
-    for s in symbols:
-        res = analyze_stock(s)
-        if res:
-            results.append(res)
+for s in symbols:
+    res = analyze_stock(s)
+    if res: results.append(res)
 
 if results:
-    st.success(f"Trovati {len(results)} segnali ({analisi_mode})")
-    df_results = pd.DataFrame(results)
+    st.success(f"Trovati {len(results)} segnali.")
+    st.table(pd.DataFrame(results).drop(columns="HA_DataFrame"))
     
-    # Colonne dinamiche per la tabella
-    cols = ["Symbol"] + [c for c in df_results.columns if "Data" in c or "HA" in c and "DataFrame" not in c]
-    st.dataframe(df_results[cols], use_container_width=True)
+    sel = st.selectbox("Grafico:", [r["Symbol"] for r in results])
+    sd = next(r for r in results if r["Symbol"] == sel)
+    d_plot = sd["HA_DataFrame"].tail(30)
     
-    st.divider()
-    selected = st.selectbox("Dettaglio Grafico:", [r["Symbol"] for r in results])
-    sel_data = next(r for r in results if r["Symbol"] == selected)
-    
-    d_plot = sel_data["HA_DataFrame"].tail(30)
-    fig = go.Figure(data=[go.Candlestick(
-        x=d_plot.index,
-        open=d_plot['Open'], high=d_plot['High'],
-        low=d_plot['Low'], close=d_plot['Close'],
-        name="Heikin Ashi"
-    )])
-    
-    fig.update_layout(title=f"Analisi HA: {selected}", xaxis_rangeslider_visible=False, height=600)
+    fig = go.Figure(data=[go.Candlestick(x=d_plot.index, open=d_plot['Open'], high=d_plot['High'], low=d_plot['Low'], close=d_plot['Close'])])
+    fig.update_layout(xaxis_rangeslider_visible=False, height=600, title=f"Dettaglio HA: {sel}")
     st.plotly_chart(fig, use_container_width=True)
 else:
-    st.warning(f"Nessun segnale trovato in modalità: {analisi_mode}")
+    st.warning("Nessun segnale trovato.")
