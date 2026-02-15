@@ -24,12 +24,24 @@ st.sidebar.header("⚙️ Configurazione")
 tf_choice = st.sidebar.selectbox("Timeframe", ["Daily", "Weekly"])
 tf_map = {"Daily": "1d", "Weekly": "1wk"}
 
+# --- AGGIUNTA CARICAMENTO FILE TXT ---
 DEFAULT_SYMBOLS = [
     "NQ=F", "ES=F", "YM=F", "RTY=F", "CL=F", "RB=F", "NG=F", "GC=F", 
     "SI=F", "HG=F", "BTC=F", "ETH=F", "DX-Y.NYB", "6E=F", "6B=F"
 ]
 
-symbols = DEFAULT_SYMBOLS # Semplificato per brevità, puoi rimettere l'uploader se serve.
+uploaded_file = st.sidebar.file_uploader(
+    "📁 Carica file TXT con simboli",
+    type=["txt"]
+)
+
+if uploaded_file:
+    # Legge il file, rimuove virgole o spazi e crea la lista
+    content = uploaded_file.read().decode("utf-8")
+    symbols = content.replace(",", "\n").split()
+    symbols = [s.strip().upper() for s in symbols if s.strip()]
+else:
+    symbols = DEFAULT_SYMBOLS
 
 # --------------------------------------------------
 # HEIKIN ASHI CALCULATION (FORMULA PRECISA)
@@ -41,7 +53,6 @@ def get_heikin_ashi(df):
     ha_df['Close'] = (df['Open'] + df['High'] + df['Low'] + df['Close']) / 4
     
     # 2. HA Open = (Open_prev + Close_prev) / 2
-    # Usiamo un loop perché ogni riga dipende dalla precedente
     ha_open = np.zeros(len(df))
     ha_open[0] = (df['Open'].iloc[0] + df['Close'].iloc[0]) / 2
     
@@ -82,9 +93,7 @@ def analyze_stock(symbol):
     # Calcolo HA
     ha_data = get_heikin_ashi(data)
     
-    # Prendiamo le ultime due candele CHIUSE (escludendo quella in corso se il mercato è aperto)
-    # Spesso yfinance include la candela "Live" come ultima riga.
-    # Per sicurezza prendiamo le candele chiuse:
+    # Logica approvata: iloc[-2] (Ieri) vs iloc[-3] (Altro Ieri)
     ieri = ha_data.iloc[-2]
     altro_ieri = ha_data.iloc[-3]
 
@@ -132,7 +141,11 @@ if results:
         name="Heikin Ashi"
     ))
     
-    fig.update_layout(title=f"Analisi HA: {selected}", xaxis_rangeslider_visible=False)
+    fig.update_layout(
+        title=f"Analisi HA: {selected}", 
+        xaxis_rangeslider_visible=False,
+        height=600
+    )
     st.plotly_chart(fig, use_container_width=True)
 else:
     st.warning("Nessun segnale trovato con i criteri: Altro Ieri ROSSA -> Ieri VERDE.")
