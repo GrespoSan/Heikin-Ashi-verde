@@ -15,7 +15,7 @@ st.set_page_config(
 )
 
 st.title("📊 Scanner Inversione Heikin Ashi")
-st.markdown("Cerca: **Ieri VERDE** (HA Close > HA Open) e **Altro Ieri ROSSA** (HA Close < HA Open)")
+st.markdown("Cerca: **Candela Recente VERDE** preceduta da **Candela Precedente ROSSA**")
 
 # --------------------------------------------------
 # SIDEBAR
@@ -24,7 +24,16 @@ st.sidebar.header("⚙️ Configurazione")
 tf_choice = st.sidebar.selectbox("Timeframe", ["Daily", "Weekly"])
 tf_map = {"Daily": "1d", "Weekly": "1wk"}
 
+# --- NUOVO TOGGLE (SELETTORE MODALITÀ) ---
+st.sidebar.divider()
+analisys_mode = st.sidebar.radio(
+    "Modalità di Confronto:",
+    ("Classica (Ieri vs Altro Ieri)", "Live (Oggi vs Ieri)"),
+    help="Classica: Usa solo candele chiuse (sicuro per RB). Live: Include la candela in corso."
+)
+
 # --- CARICAMENTO FILE TXT ---
+st.sidebar.divider()
 DEFAULT_SYMBOLS = [
     "NQ=F", "ES=F", "YM=F", "RTY=F", "CL=F", "RB=F", "NG=F", "GC=F", 
     "SI=F", "HG=F", "BTC=F", "ETH=F", "DX-Y.NYB", "6E=F", "6B=F"
@@ -40,7 +49,7 @@ else:
     symbols = DEFAULT_SYMBOLS
 
 # --------------------------------------------------
-# HEIKIN ASHI CALCULATION
+# HEIKIN ASHI CALCULATION (INVARIATA)
 # --------------------------------------------------
 def get_heikin_ashi(df):
     ha_df = df.copy()
@@ -62,7 +71,7 @@ def get_heikin_ashi(df):
     return ha_df
 
 # --------------------------------------------------
-# DATA FETCH
+# DATA FETCH (INVARIATA)
 # --------------------------------------------------
 @st.cache_data
 def fetch_data(symbol, interval):
@@ -76,7 +85,7 @@ def fetch_data(symbol, interval):
         return None
 
 # --------------------------------------------------
-# ANALYSIS (LOGICA STRICT: -2 vs -3)
+# ANALYSIS (LOGICA ADATTIVA)
 # --------------------------------------------------
 def analyze_stock(symbol):
     data = fetch_data(symbol, tf_map[tf_choice])
@@ -86,28 +95,40 @@ def analyze_stock(symbol):
     # Calcolo HA
     ha_data = get_heikin_ashi(data)
     
-    # Logica: Ieri (-2) vs Altro Ieri (-3)
-    # Ignora sempre l'ultima candela (-1) che potrebbe essere live/oggi
-    ieri = ha_data.iloc[-2]
-    altro_ieri = ha_data.iloc[-3]
+    # --- LOGICA TOGGLE ---
+    if analisys_mode == "Classica (Ieri vs Altro Ieri)":
+        # Logica sicura (Fix RB)
+        c_recente = ha_data.iloc[-2] # Ieri
+        c_precedente = ha_data.iloc[-3] # Altro Ieri
+        label_recente = "Ieri"
+        label_precedente = "Altro Ieri"
+    else:
+        # Logica Live
+        c_recente = ha_data.iloc[-1] # Oggi
+        c_precedente = ha_data.iloc[-2] # Ieri
+        label_recente = "Oggi (Live)"
+        label_precedente = "Ieri"
 
     # Condizioni Colore
-    ieri_verde = ieri['Close'] > ieri['Open']
-    altro_ieri_rossa = altro_ieri['Close'] < altro_ieri['Open']
+    # Recente deve essere VERDE (Close > Open)
+    recente_verde = c_recente['Close'] > c_recente['Open']
+    # Precedente deve essere ROSSA (Close < Open)
+    precedente_rossa = c_precedente['Close'] < c_precedente['Open']
 
-    if ieri_verde and altro_ieri_rossa:
+    if recente_verde and precedente_rossa:
+        # Costruiamo il dizionario con nomi dinamici per la tabella
         return {
             "Symbol": symbol,
             
-            # DATI ALTRO IERI (Rossa)
-            "Data Altro Ieri": altro_ieri.name.strftime("%d/%m/%Y"),
-            "HA Open (A.Ieri)": round(altro_ieri['Open'], 4),
-            "HA Close (A.Ieri)": round(altro_ieri['Close'], 4),
+            # PRECEDENTE (Rossa)
+            f"Data {label_precedente}": c_precedente.name.strftime("%d/%m/%Y"),
+            f"HA Open ({label_precedente})": round(c_precedente['Open'], 4),
+            f"HA Close ({label_precedente})": round(c_precedente['Close'], 4),
             
-            # DATI IERI (Verde)
-            "Data Ieri": ieri.name.strftime("%d/%m/%Y"),
-            "HA Open (Ieri)": round(ieri['Open'], 4),
-            "HA Close (Ieri)": round(ieri['Close'], 4),
+            # RECENTE (Verde)
+            f"Data {label_recente}": c_recente.name.strftime("%d/%m/%Y"),
+            f"HA Open ({label_recente})": round(c_recente['Open'], 4),
+            f"HA Close ({label_recente})": round(c_recente['Close'], 4),
             
             "DataFrame": data,
             "HA_DataFrame": ha_data
@@ -118,26 +139,24 @@ def analyze_stock(symbol):
 # RUN & DISPLAY
 # --------------------------------------------------
 results = []
-with st.spinner("Scansione in corso..."):
+with st.spinner(f"Scansione in corso ({analisys_mode})..."):
     for s in symbols:
         res = analyze_stock(s)
         if res:
             results.append(res)
 
 if results:
-    st.success(f"Trovati {len(results)} segnali di inversione!")
+    st.success(f"Trovati {len(results)} segnali! ({analisys_mode})")
     
-    # Creazione DataFrame per la tabella
+    # Creazione DataFrame
     df_results = pd.DataFrame(results)
     
-    # Seleziona e ordina le colonne da mostrare
-    cols_to_show = [
-        "Symbol", 
-        "Data Altro Ieri", "HA Open (A.Ieri)", "HA Close (A.Ieri)", 
-        "Data Ieri", "HA Open (Ieri)", "HA Close (Ieri)"
-    ]
+    # Identifichiamo le colonne da mostrare escludendo i DataFrame
+    cols = [c for c in df_results.columns if "DataFrame" not in c]
+    # Riordiniamo per avere Symbol prima
+    cols = ["Symbol"] + [c for c in cols if c != "Symbol"]
     
-    st.dataframe(df_results[cols_to_show], use_container_width=True)
+    st.dataframe(df_results[cols], use_container_width=True)
     
     st.divider()
     
@@ -157,10 +176,10 @@ if results:
     ))
     
     fig.update_layout(
-        title=f"Analisi HA: {selected} (Daily/Weekly)", 
+        title=f"Analisi HA: {selected} - {analisys_mode}", 
         xaxis_rangeslider_visible=False,
         height=600
     )
     st.plotly_chart(fig, use_container_width=True)
 else:
-    st.warning("Nessun segnale trovato con i criteri: Altro Ieri ROSSA -> Ieri VERDE.")
+    st.warning("Nessun segnale trovato con i criteri selezionati.")
