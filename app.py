@@ -24,7 +24,7 @@ st.sidebar.header("⚙️ Configurazione")
 tf_choice = st.sidebar.selectbox("Timeframe", ["Daily", "Weekly"])
 tf_map = {"Daily": "1d", "Weekly": "1wk"}
 
-# --- AGGIUNTA CARICAMENTO FILE TXT (RIPRISTINATA) ---
+# --- CARICAMENTO FILE TXT ---
 DEFAULT_SYMBOLS = [
     "NQ=F", "ES=F", "YM=F", "RTY=F", "CL=F", "RB=F", "NG=F", "GC=F", 
     "SI=F", "HG=F", "BTC=F", "ETH=F", "DX-Y.NYB", "6E=F", "6B=F"
@@ -40,7 +40,7 @@ else:
     symbols = DEFAULT_SYMBOLS
 
 # --------------------------------------------------
-# HEIKIN ASHI CALCULATION (FORMULA ORIGINALE FUNZIONANTE)
+# HEIKIN ASHI CALCULATION
 # --------------------------------------------------
 def get_heikin_ashi(df):
     ha_df = df.copy()
@@ -76,7 +76,7 @@ def fetch_data(symbol, interval):
         return None
 
 # --------------------------------------------------
-# ANALYSIS (LOGICA ORIGINALE iloc[-2] e iloc[-3])
+# ANALYSIS (LOGICA STRICT: -2 vs -3)
 # --------------------------------------------------
 def analyze_stock(symbol):
     data = fetch_data(symbol, tf_map[tf_choice])
@@ -86,9 +86,8 @@ def analyze_stock(symbol):
     # Calcolo HA
     ha_data = get_heikin_ashi(data)
     
-    # LOGICA CHE FUNZIONAVA:
-    # iloc[-2] è la candela di Ieri (chiusa)
-    # iloc[-3] è la candela di Altro Ieri
+    # Logica: Ieri (-2) vs Altro Ieri (-3)
+    # Ignora sempre l'ultima candela (-1) che potrebbe essere live/oggi
     ieri = ha_data.iloc[-2]
     altro_ieri = ha_data.iloc[-3]
 
@@ -99,9 +98,17 @@ def analyze_stock(symbol):
     if ieri_verde and altro_ieri_rossa:
         return {
             "Symbol": symbol,
-            "Data Ieri": ieri.name.date(),
-            "HA_Open_Ieri": round(ieri['Open'], 4),
-            "HA_Close_Ieri": round(ieri['Close'], 4),
+            
+            # DATI ALTRO IERI (Rossa)
+            "Data Altro Ieri": altro_ieri.name.strftime("%d/%m/%Y"),
+            "HA Open (A.Ieri)": round(altro_ieri['Open'], 4),
+            "HA Close (A.Ieri)": round(altro_ieri['Close'], 4),
+            
+            # DATI IERI (Verde)
+            "Data Ieri": ieri.name.strftime("%d/%m/%Y"),
+            "HA Open (Ieri)": round(ieri['Open'], 4),
+            "HA Close (Ieri)": round(ieri['Close'], 4),
+            
             "DataFrame": data,
             "HA_DataFrame": ha_data
         }
@@ -118,9 +125,23 @@ with st.spinner("Scansione in corso..."):
             results.append(res)
 
 if results:
-    st.success(f"Trovati {len(results)} segnali!")
-    st.table(pd.DataFrame(results)[["Symbol", "Data Ieri", "HA_Open_Ieri", "HA_Close_Ieri"]])
+    st.success(f"Trovati {len(results)} segnali di inversione!")
     
+    # Creazione DataFrame per la tabella
+    df_results = pd.DataFrame(results)
+    
+    # Seleziona e ordina le colonne da mostrare
+    cols_to_show = [
+        "Symbol", 
+        "Data Altro Ieri", "HA Open (A.Ieri)", "HA Close (A.Ieri)", 
+        "Data Ieri", "HA Open (Ieri)", "HA Close (Ieri)"
+    ]
+    
+    st.dataframe(df_results[cols_to_show], use_container_width=True)
+    
+    st.divider()
+    
+    # Grafico
     selected = st.selectbox("Dettaglio Grafico:", [r["Symbol"] for r in results])
     sel_data = next(r for r in results if r["Symbol"] == selected)
     
@@ -136,7 +157,7 @@ if results:
     ))
     
     fig.update_layout(
-        title=f"Analisi HA: {selected}", 
+        title=f"Analisi HA: {selected} (Daily/Weekly)", 
         xaxis_rangeslider_visible=False,
         height=600
     )
