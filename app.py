@@ -8,9 +8,10 @@ from datetime import date
 # --------------------------------------------------
 # PAGE CONFIG
 # --------------------------------------------------
-st.set_page_config(page_title="HA Trend Scanner - DEBUG MODE", page_icon="🕯️", layout="wide")
+st.set_page_config(page_title="HA Trend Scanner", page_icon="🕯️", layout="wide")
 
-st.title("📊 Scanner Heikin Ashi + Debug Monitor")
+st.title("📊 Scanner Inversione Heikin Ashi")
+st.markdown("Analisi basata sulla tua logica HA originale.")
 
 # --------------------------------------------------
 # SIDEBAR
@@ -23,15 +24,20 @@ st.sidebar.divider()
 analisi_mode = st.sidebar.radio(
     "Seleziona Periodo:",
     ["Classica ([-2] vs [-3])", "Live ([-1] vs [-2])"],
-    index=1 # Default su Live per testare RB oggi
+    help="Se è domenica e vuoi vedere Venerdì vs Giovedì, usa LIVE."
 )
 
+# CARICAMENTO FILE TXT
 DEFAULT_SYMBOLS = ["NQ=F", "ES=F", "YM=F", "CL=F", "RB=F", "GC=F", "BTC=F"]
 uploaded_file = st.sidebar.file_uploader("📁 Carica file TXT", type=["txt"])
-symbols = [s.strip().upper() for s in uploaded_file.read().decode("utf-8").replace(",", "\n").split() if s.strip()] if uploaded_file else DEFAULT_SYMBOLS
+if uploaded_file:
+    content = uploaded_file.read().decode("utf-8")
+    symbols = [s.strip().upper() for s in content.replace(",", "\n").split() if s.strip()]
+else:
+    symbols = DEFAULT_SYMBOLS
 
 # --------------------------------------------------
-# HEIKIN ASHI (LOGICA ORIGINALE)
+# HEIKIN ASHI CALCULATION (LOGICA ORIGINALE)
 # --------------------------------------------------
 def get_heikin_ashi(df):
     ha_df = df.copy()
@@ -46,80 +52,86 @@ def get_heikin_ashi(df):
     return ha_df
 
 # --------------------------------------------------
-# DATA FETCH
+# DATA FETCH - PULIZIA PROFONDA
 # --------------------------------------------------
 @st.cache_data
 def fetch_data(symbol, interval):
     try:
+        # Usiamo auto_adjust=True per pulire i dati alla fonte
         data = yf.download(symbol, period="1y", interval=interval, progress=False, auto_adjust=True)
         if data.empty: return None
+        
+        # FIX per le colonne se yfinance restituisce MultiIndex
         if isinstance(data.columns, pd.MultiIndex):
             data.columns = data.columns.get_level_values(0)
+            
+        # Rimuoviamo candele sporche (senza volumi o senza movimento di prezzo)
+        # Questo serve per RB la domenica, per eliminare la candela 'fake' di oggi
+        data = data[(data['Volume'] > 0) & (data['High'] > data['Low'])].dropna()
         
-        # Pulizia base: eliminiamo solo i weekend vuoti assoluti
-        data = data[data['Volume'] > 0].dropna()
         return data
-    except: return None
+    except:
+        return None
 
 # --------------------------------------------------
-# LOGICA DI ANALISI E RACCOLTA DEBUG
+# ANALYSIS (LOGICA RIGIDA [-1] vs [-2])
+# --------------------------------------------------
+def analyze_stock(symbol):
+    data = fetch_data(symbol, tf_map[tf_choice])
+    if data is None or len(data) < 10:
+        return None
+
+    ha_data = get_heikin_ashi(data)
+    
+    if analisi_mode == "Classica ([-2] vs [-3])":
+        idx_rec, idx_prev = -2, -3
+    else:
+        # LIVE: Questa deve essere Venerdì vs Giovedì se oggi è domenica
+        idx_rec, idx_prev = -1, -2
+
+    c_rec = ha_data.iloc[idx_rec]
+    c_prev = ha_data.iloc[idx_prev]
+
+    # CONDIZIONE: Verde (C>O) e precedente Rossa (C<O)
+    is_verde = c_rec['Close'] > c_rec['Open']
+    is_rossa = c_prev['Close'] < c_prev['Open']
+
+    if is_verde and is_rossa:
+        return {
+            "Symbol": symbol,
+            "Data Recente": c_rec.name.strftime("%d/%m/%Y"),
+            "Data Precedente": c_prev.name.strftime("%d/%m/%Y"),
+            "HA_Open_Rec": round(c_rec['Open'], 4),
+            "HA_Close_Rec": round(c_rec['Close'], 4),
+            "HA_DataFrame": ha_data
+        }
+    return None
+
+# --------------------------------------------------
+# RUN & DISPLAY
 # --------------------------------------------------
 results = []
-debug_info = []
-
-with st.spinner("Analisi in corso..."):
-    for s in symbols:
-        data = fetch_data(s, tf_map[tf_choice])
-        if data is None or len(data) < 5: continue
-        
-        ha_data = get_heikin_ashi(data)
-        
-        # Salviamo i dati per il Debug (Ultime 3 date reali nel DB)
-        debug_info.append({
-            "Simbolo": s,
-            "[-3] Date": ha_data.index[-3].strftime("%d/%m"),
-            "[-2] Date": ha_data.index[-2].strftime("%d/%m"),
-            "[-1] Date": ha_data.index[-1].strftime("%d/%m")
-        })
-
-        # Selezione Indici
-        idx_rec, idx_prev = (-1, -2) if analisi_mode == "Live ([-1] vs [-2])" else (-2, -3)
-        
-        c_rec = ha_data.iloc[idx_rec]
-        c_prev = ha_data.iloc[idx_prev]
-        
-        # Test Colore
-        if (c_rec['Close'] > c_rec['Open']) and (c_prev['Close'] < c_prev['Open']):
-            results.append({
-                "Symbol": s,
-                "Data Prec": c_prev.name.strftime("%d/%m"),
-                "Data Rec": c_rec.name.strftime("%d/%m"),
-                "HA_Open_Rec": round(c_rec['Open'], 4),
-                "HA_Close_Rec": round(c_rec['Close'], 4),
-                "ha_df": ha_data
-            })
-
-# --------------------------------------------------
-# DISPLAY RISULTATI
-# --------------------------------------------------
-if results:
-    st.success(f"Segnali trovati: {len(results)}")
-    st.table(pd.DataFrame(results).drop(columns="ha_df"))
-else:
-    st.warning("Nessun segnale trovato con la logica selezionata.")
-
-# --------------------------------------------------
-# SEZIONE DEBUG (FONDAMENTALE)
-# --------------------------------------------------
-st.divider()
-with st.expander("🔍 MONITOR DEBUG (Controlla le date qui sotto per RB)"):
-    st.write("Queste sono le date che lo script sta effettivamente assegnando agli indici:")
-    st.table(pd.DataFrame(debug_info))
+for s in symbols:
+    res = analyze_stock(s)
+    if res: results.append(res)
 
 if results:
-    sel = st.selectbox("Grafico:", [r["Symbol"] for r in results])
+    st.success(f"Trovati {len(results)} segnali in modalità {analisi_mode}")
+    df_res = pd.DataFrame(results).drop(columns="HA_DataFrame")
+    st.table(df_res)
+    
+    st.divider()
+    sel = st.selectbox("Seleziona simbolo per il grafico:", [r["Symbol"] for r in results])
     sd = next(r for r in results if r["Symbol"] == sel)
-    d_p = sd["ha_df"].tail(20)
-    fig = go.Figure(data=[go.Candlestick(x=d_p.index, open=d_p['Open'], high=d_p['High'], low=d_p['Low'], close=d_p['Close'])])
-    fig.update_layout(xaxis_rangeslider_visible=False, title=f"Dettaglio {sel}")
+    
+    # Grafico
+    d_plot = sd["HA_DataFrame"].tail(30)
+    fig = go.Figure(data=[go.Candlestick(
+        x=d_plot.index, open=d_plot['Open'], high=d_plot['High'], 
+        low=d_plot['Low'], close=d_plot['Close']
+    )])
+    fig.update_layout(xaxis_rangeslider_visible=False, height=500, title=f"Dettaglio {sel}")
     st.plotly_chart(fig, use_container_width=True)
+else:
+    st.warning(f"Nessun segnale trovato in modalità {analisi_mode}.")
+    st.info("Nota: Se RB non appare, controlla che Venerdì sia effettivamente VERDE Heikin Ashi e Giovedì ROSSO.")
