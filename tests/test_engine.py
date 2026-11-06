@@ -158,3 +158,22 @@ def test_compounded_losses_create_larger_account_drawdown_than_single_trade():
     assert np.isclose(result['stats']['Peggior trade %'],-10.)
     assert np.isclose(result['stats']['Max drawdown %'],-27.1)
     assert result['stats']['Massimo perdite consecutive']==3
+
+
+def test_price_ema_uses_standard_close_and_configurable_period():
+    df=long_daily();df['close']=10+np.sin(np.arange(len(df))/9)
+    for n in (3,21,55):
+        x=calculate(df,Indicators(trend_ema=n,forces_source='Heikin Ashi'))
+        reference=[df.close.iloc[0]]
+        for value in df.close.iloc[1:]:reference.append(reference[-1]+2/(n+1)*(value-reference[-1]))
+        np.testing.assert_allclose(x.price_ema,reference,rtol=1e-12)
+        expected=(df.close>pd.Series(reference,index=df.index))&(np.arange(len(df))>=n-1)
+        pd.testing.assert_series_equal(x.ema_filter,expected.rename('ema_filter'))
+    assert 'ema_filter' not in Rules().modules
+
+def test_price_ema_is_entry_filter_and_does_not_force_ha_exit():
+    x=synthetic();x['ha']=[False,True,True,True,True,False,False,False]
+    x['forces_positive']=True;x['ema_filter']=[False,True,False,False,False,False,False,False]
+    result=backtest(x,Rules(modules=('ha','forces_positive','ema_filter')))
+    assert result['trades'].iloc[0].Ingresso==x.index[2]
+    assert result['trades'].iloc[0].Uscita==x.index[6]

@@ -79,3 +79,31 @@ def test_session_schema_upgrade_clears_only_results():
         assert 'lab_results' not in at.session_state
         assert len(at.session_state['lab_data'])==7
         assert any('App aggiornata' in item.value for item in at.info)
+
+
+def test_parameter_changes_in_backtest_do_not_rescan_universe():
+    from engine import prepare_features
+    idx=pd.bdate_range('2010-01-01','2026-10-30');c=20+np.sin(np.arange(len(idx))/5)
+    data=pd.DataFrame({'open':c-.1,'high':c+.5,'low':c-.5,'close':c,'volume':100},index=idx)
+    with patch('data_sources.yahoo',return_value=data),patch('feature_cache.prepare_features',wraps=prepare_features) as calc:
+        at=AppTest.from_file(str(Path(__file__).parents[1]/'app.py'),default_timeout=60).run()
+        next(b for b in at.button if b.label=='Carica dati e aggiorna screener').click().run()
+        assert calc.call_count==7 # prima scansione richiesta
+        at.radio(key='section').set_value('Backtest').run()
+        baseline=calc.call_count
+        at.number_input[0] # il test usa le etichette per non dipendere dall’ordine
+        next(n for n in at.number_input if n.label=='Forces SMA').set_value(4).run()
+        next(n for n in at.number_input if n.label=='Periodo EMA prezzo').set_value(55).run()
+        at.checkbox(key='mod_ema_filter').check().run()
+        assert not at.exception
+        assert calc.call_count==baseline # nessun calcolo prima di Esegui
+        next(b for b in at.button if b.label=='Esegui backtest').click().run()
+        assert not at.exception
+        assert calc.call_count==baseline+1 # solo il ticker selezionato
+        next(n for n in at.number_input if n.label=='Commissione % per lato').set_value(.2).run()
+        assert calc.call_count==baseline+1
+        next(b for b in at.button if b.label=='Esegui backtest').click().run()
+        assert not at.exception
+        assert calc.call_count==baseline+1 # stessi indicatori riutilizzati
+        assert at.session_state['lab_results']['run_config']['EMA prezzo']==55
+        assert at.session_state['lab_results']['run_config']['Filtro EMA'] is True

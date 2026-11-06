@@ -9,7 +9,7 @@ import pandas as pd
 MODULES = {
     'ha': 'HA verde', 'hull_signal': 'Hull LONG recente', 'hull_trend': 'Hull BULL',
     'forces_positive': 'Forces positivo', 'forces_strong': 'Forces in rafforzamento',
-    'forces_direction': 'Forces direzione LONG',
+    'forces_direction': 'Forces direzione LONG', 'ema_filter': 'Prezzo sopra EMA',
 }
 @dataclass(frozen=True)
 class Indicators:
@@ -21,6 +21,7 @@ class Indicators:
     hull: int = 16
     memory: int = 3
     atr: int = 14
+    trend_ema: int = 21
 @dataclass(frozen=True)
 class Rules:
     modules: tuple = ('ha', 'forces_positive')
@@ -139,7 +140,7 @@ def wma(s,n):
     weights=np.arange(1,n+1,dtype=float)
     return s.rolling(n).apply(lambda a: np.dot(a,weights)/weights.sum(),raw=True)
 def calculate(df,cfg):
-    if min(cfg.sma,cfg.ema,cfg.lag,cfg.memory,cfg.atr)<1 or cfg.hull<2: raise ValueError('Periodi non validi.')
+    if min(cfg.sma,cfg.ema,cfg.lag,cfg.memory,cfg.atr,cfg.trend_ema)<1 or cfg.hull<2: raise ValueError('Periodi non validi.')
     x=df.copy();hc=(x.open+x.high+x.low+x.close)/4
     ho=np.empty(len(x))
     if not len(x): raise ValueError('Nessuna barra disponibile.')
@@ -173,6 +174,8 @@ def calculate(df,cfg):
         atr[cfg.atr-1]=tr.iloc[:cfg.atr].mean()
         for i in range(cfg.atr,len(x)):atr[i]=atr[i-1]+(tr.iloc[i]-atr[i-1])/cfg.atr
     x['atr']=atr
+    x['price_ema']=x.close.ewm(span=cfg.trend_ema,adjust=False).mean()
+    x['ema_filter']=(x.close>x.price_ema)&(np.arange(len(x))>=cfg.trend_ema-1)
     x['ready']=np.arange(len(x))>=warmup_bars(cfg)
     return x
 def evaluate(x,modules):
@@ -262,6 +265,7 @@ def backtest(x,rules,start=None,end=None):
     if pos:
         opened={'Ingresso':pos['date'],'Prezzo':pos['entry'],'Quantità':pos['qty'],'Stop':pos['stop'],'Target':pos['target'],'PnL non realizzato':(x.close.iloc[ids[-1]]-pos['entry'])*pos['qty']*point,'Uscita al prossimo open':pending_exit}
     return {'schema':2,'stats':stats,'trades':t,'equity':eq,'open':opened,'signal':signal,'period':period,'drawdown':drawdown_detail}
+
 
 
 

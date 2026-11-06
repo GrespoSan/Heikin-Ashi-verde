@@ -1,4 +1,6 @@
 from dataclasses import asdict,replace
+from collections import OrderedDict
+from feature_cache import cached_features
 from datetime import date,timedelta
 from pathlib import Path
 import hashlib
@@ -15,9 +17,9 @@ from engine import Indicators,Rules,MODULES,calculate,evaluate,backtest,parse_sy
 from data_sources import yahoo,alpaca,read_import,completed_bars
 st.set_page_config(page_title='G. Trend Lab',page_icon='🧪',layout='wide')
 st.title('G. Trend Lab')
-st.caption('v1.2.1 · Screener e laboratorio LONG · Heikin Ashi, Hull e Forces')
+st.caption('v1.3 · Screener e laboratorio LONG · HA, Hull, Forces ed EMA')
 # I risultati sono effimeri e dipendono dallo schema del motore, non solo dai parametri.
-SESSION_SCHEMA = 'trend-lab-results-2'
+SESSION_SCHEMA = 'trend-lab-results-3'
 def compatible_result(value):
     return (isinstance(value,dict) and value.get('schema')==2
         and all(k in value for k in ('stats','trades','equity','period','drawdown','run_config'))
@@ -26,7 +28,7 @@ def compatible_result(value):
         and all(k in value['stats'] for k in ('Peggior trade %','Massimo perdite consecutive')))
 if st.session_state.get('result_session_schema') != SESSION_SCHEMA:
     had_results=st.session_state.get('lab_results') is not None
-    for name in ('lab_results','lab_features','bt_signature','comparison','compare_signature','compare_errors'):
+    for name in ('lab_results','lab_features','bt_signature','comparison','compare_signature','compare_errors','feature_cache','export_cache'):
         st.session_state.pop(name,None)
     st.session_state.result_session_schema=SESSION_SCHEMA
     if had_results:st.info('App aggiornata: il precedente risultato è stato azzerato. Dati e impostazioni restano disponibili; premi Esegui backtest per ricalcolare.')
@@ -38,6 +40,7 @@ HELP={
 'hull_trend':'Hull crescente: non richiede un segnale recente.',
 'forces_positive':'AV1−AV2 sopra zero, anche se la prevalenza rialzista si sta attenuando.',
 'forces_strong':'Forces positivo e in aumento, oppure appena passato a positivo. Include già la prevalenza positiva.',
+'ema_filter':'LONG: close standard della candela chiusa strettamente sopra la EMA del prezzo. Periodo modificabile, default 21. Non impone pendenza positiva o un nuovo incrocio. Influenza ingresso/screener, non l’uscita scelta. Con grafico HA usa comunque prezzi standard.',
 'forces_direction':'Direzione Forces secondo ShortTerm/Lag. ShortTerm OFF coincide con la prevalenza positiva; ON può essere LONG anche sotto zero.',
 }
 def secrets_value(k):
@@ -59,6 +62,7 @@ def show_chart(x,result=None,key='chart'):
     fig=make_subplots(rows=2,cols=1,shared_xaxes=True,row_heights=[.72,.28],vertical_spacing=.04)
     fig.add_trace(go.Candlestick(x=q.index,open=q[prefix+'open'],high=q[prefix+'high'],low=q[prefix+'low'],close=q[prefix+'close'],name=chart_type),row=1,col=1)
     fig.add_trace(go.Scatter(x=q.index,y=q.hull,name='Hull (prezzi standard)',line={'color':'#8b5e34','width':1.5}),row=1,col=1)
+    fig.add_trace(go.Scatter(x=q.index,y=q.price_ema,name=f'EMA prezzo {int(ma_period)}',line={'color':'#287ac2','width':1.5}),row=1,col=1)
     fig.add_trace(go.Bar(x=q.index,y=q.forces,name='Forces',marker_color=np.where(q.forces>=0,'#00803d','#c82c3a')),row=2,col=1)
     if result is not None and not result['trades'].empty:
         t=result['trades'];t=t[t.Ingresso>=q.index[0]]
@@ -98,6 +102,7 @@ with st.sidebar:
     lag=st.number_input('Forces LagBars',1,100,1)
     hull=st.number_input('Hull periodo',2,200,16);memory=st.number_input('Hull memoria',1,20,3)
     atr=st.number_input('ATR periodo',2,100,14)
+    ma_period=st.number_input('Periodo EMA prezzo',1,500,21,help='Media esponenziale sui close standard. Modifica il modulo Prezzo sopra EMA e la linea sul grafico. Il periodo EMA di Forces resta separato.')
     st.divider();st.header('Ingresso e uscita')
     entry=st.selectbox('Ingresso',['Primo allineamento','Ogni allineamento da flat'],help='Primo: entra quando i moduli passano da incompleti a completi. Ogni: da flat entra se sono tutti completi. Esecuzione sempre all’open successivo.')
     exit_mode=st.selectbox('Uscita',['HA rossa','Hull BEAR','Forces non positivo','Allineamento perso','Numero barre'])
@@ -117,7 +122,7 @@ with st.sidebar:
     commission_pct=st.number_input('Commissione % per lato',0.,5.,.10,.01)
     commission_fixed=st.number_input('Commissione per unità/contratto per lato',0.,100.,0.,.1)
     slip=st.number_input('Slippage % per lato',0.,5.,.05,.01)
-ind=Indicators(int(sma),int(ema),fsource,short_term,int(lag),int(hull),int(memory),int(atr))
+ind=Indicators(int(sma),int(ema),fsource,short_term,int(lag),int(hull),int(memory),int(atr),int(ma_period))
 rules=Rules(mods,entry,exit_mode,int(holding),stop,float(atr_multiple),float(stop_pct),float(target) if stop!='Nessuno' else 0.,float(capital),float(allocation),float(commission_pct),float(commission_fixed),float(slip),float(tick),instrument,float(point),int(contracts),currency)
 if not mods:st.info('Attiva almeno un modulo per generare segnali.')
 if 'hull_signal' in mods and 'hull_trend' in mods:st.caption('Hull segnale include già Hull trend: i due filtri sono ridondanti.')
@@ -156,22 +161,29 @@ if st.button('Carica dati e aggiorna screener',type='primary'):
             if source=='Alpaca' and not isinstance(exc,ValueError):errors.append({'Ticker':symbol,'Errore':'Richiesta Alpaca fallita: verificare credenziali, feed e autorizzazioni.'})
             else:errors.append({'Ticker':symbol,'Errore':str(exc)[:250]})
         bar.progress((n+1)/max(1,len(symbols)))
+    st.session_state.lab_data_revision=str(pd.Timestamp.now().value)
+    st.session_state.feature_cache=OrderedDict()
+    st.session_state.pop('export_cache',None)
     st.session_state.lab_data=data;st.session_state.lab_notes=notes;st.session_state.lab_errors=errors;st.session_state.pop('lab_results',None)
 if st.session_state.get('lab_errors'):st.dataframe(pd.DataFrame(st.session_state.lab_errors),hide_index=True,width='stretch')
 data=st.session_state.get('lab_data',{})
 if not data:
     st.info('Carica la lista.txt oppure usa i ticker proposti, poi premi «Carica dati e aggiorna screener».')
     st.stop()
-features={};screen_quality={}
-for symbol,df in data.items():
-    try:
-        xx=prepare_features(df,ind)
-        if bool(xx.ready.iloc[-1]):features[symbol]=xx
-        else:screen_quality[symbol]=f'Servono {warmup_bars(ind)} barre pulite consecutive prima di pubblicare il segnale.'
-    except ValueError as exc:screen_quality[symbol]=str(exc)
-
+if 'lab_data_revision' not in st.session_state:st.session_state.lab_data_revision=str(pd.Timestamp.now().value)
+if 'feature_cache' not in st.session_state:st.session_state.feature_cache=OrderedDict()
+revision=st.session_state.lab_data_revision
+def get_features(symbol,cfg,start=None,end=None):
+    return cached_features(st.session_state.feature_cache,revision,symbol,cfg,data[symbol],start,end)
 section=st.radio('Sezione',['Screener','Backtest','Confronto','Dati e metodo'],horizontal=True,key='section')
 if section=='Screener':
+    features={};screen_quality={}
+    for symbol,df in data.items():
+        try:
+            xx=get_features(symbol,ind)
+            if bool(xx.ready.iloc[-1]):features[symbol]=xx
+            else:screen_quality[symbol]=f'Servono {warmup_bars(ind)} barre pulite consecutive prima di pubblicare il segnale.'
+        except ValueError as exc:screen_quality[symbol]=str(exc)
     rows=[]
     for s,x in features.items():
         row=x.iloc[-1];known=bool(row.ready);ok=[MODULES[k] for k in mods if known and bool(row[k])];missing=[MODULES[k]+(' · N/D' if not known else '') for k in mods if not known or not bool(row[k])]
@@ -190,15 +202,17 @@ if section=='Screener':
         st.caption(st.session_state.lab_notes.get(s,''))
 if section=='Backtest':
     s=st.selectbox('Strumento',list(data),key='bt_symbol');raw_test=data[s]
-    x=features[s] if s in features else calculate(raw_test,ind)
-    earliest=x.index[min(len(x)-1,warmup_bars(ind))].date()
+    bad=invalid_ohlc(raw_test)
+    last_bad=np.flatnonzero(bad.to_numpy())
+    clean_start=int(last_bad[-1])+1 if len(last_bad) else 0
+    earliest=raw_test.index[min(len(raw_test)-1,clean_start+warmup_bars(ind))].date()
     with st.form('backtest_period_form'):
         c1,c2=st.columns(2)
         start=c1.date_input('Inizio test',value=earliest,min_value=raw_test.index[0].date(),max_value=raw_test.index[-1].date(),key='bt_start')
         end=c2.date_input('Fine test',value=raw_test.index[-1].date(),min_value=raw_test.index[0].date(),max_value=raw_test.index[-1].date(),key='bt_end')
         st.caption('Premi Esegui backtest per applicare le date. Il riepilogo sottostante riporta sempre il periodo dell’ultima esecuzione, non le modifiche ancora da inviare.')
         submitted=st.form_submit_button('Esegui backtest',disabled=not bool(mods))
-    signature=json.dumps([config_id(ind,rules),s,str(start),str(end),data_signature])
+    signature=json.dumps([config_id(ind,rules),s,str(start),str(end),data_signature,revision])
     if st.session_state.get('bt_signature')!=signature:st.session_state.pop('lab_results',None)
     if submitted:
         st.session_state.pop('lab_results',None)
@@ -206,10 +220,10 @@ if section=='Backtest':
             if '=F' in s and instrument=='Futures (contratto singolo)':raise ValueError('Il ticker Yahoo =F è una serie continua: scegliere Studio del segnale oppure importare un contratto singolo.')
             if instrument=='Azioni / ETF / spot' and '=F' in s:raise ValueError('Per una serie =F scegliere «Serie continua: studio del segnale».')
             if instrument=='Futures (contratto singolo)' and adjustment=='Tutti gli aggiustamenti':raise ValueError('Per un singolo contratto usare prezzi non rettificati per dividendi.')
-            x=prepare_features(raw_test,ind,str(start),str(end))
+            x=get_features(s,ind,str(start),str(end))
             st.session_state.lab_features=x
             result_run=backtest(x,rules,str(start),str(end))
-            result_run['run_config']={'Ticker':s,'Timeframe':timeframe,'Configurazione':config_id(ind,rules),'Forces':fsource,'SMA':int(sma),'EMA':int(ema),'Uscita':exit_mode,'Calcolato':pd.Timestamp.now(tz='Europe/Rome').isoformat()}
+            result_run['run_config']={'Ticker':s,'Timeframe':timeframe,'Configurazione':config_id(ind,rules),'Forces':fsource,'SMA':int(sma),'EMA':int(ema),'Uscita':exit_mode,'EMA prezzo':int(ma_period),'Filtro EMA':('ema_filter' in mods),'Calcolato':pd.Timestamp.now(tz='Europe/Rome').isoformat()}
             if not compatible_result(result_run):raise ValueError('Motore in aggiornamento: il risultato usa un formato precedente. Ricarica la pagina e ripeti Esegui backtest.')
             st.session_state.lab_results=result_run;st.session_state.bt_signature=signature
         except ValueError as exc:st.error(str(exc))
@@ -224,7 +238,7 @@ if section=='Backtest':
         x=st.session_state.lab_features
         period=result['period'];run=result['run_config']
         st.success(f"Risultato calcolato: {run['Ticker']} · {run['Timeframe']} · {period['Prima barra calcolata']} → {period['Ultima barra calcolata']} · {period['Barre nel test']} barre")
-        st.caption(f"Forces {run['Forces']} {run['SMA']}/{run['EMA']} · uscita {run['Uscita']} · calcolo {run['Calcolato']} · ID {run['Configurazione']}")
+        st.caption(f"Forces {run['Forces']} {run['SMA']}/{run['EMA']} · uscita {run['Uscita']} · calcolo {run['Calcolato']} · EMA prezzo {run['EMA prezzo']} ({'filtro ON' if run['Filtro EMA'] else 'filtro OFF'}) · ID {run['Configurazione']}")
         stats=result['stats'];cs=st.columns(4)
         for col,k in zip(cs,['Rendimento %','Max drawdown %','Trade chiusi','Win rate %']):
             label='Max drawdown conto %' if k=='Max drawdown %' else k
@@ -253,14 +267,17 @@ if section=='Backtest':
                 trades=result['trades'];choice=st.selectbox('Operazione',range(len(trades)),format_func=lambda j:f"{trades.iloc[j]['Ingresso'].date()} → {trades.iloc[j]['Uscita'].date()}")
                 t=trades.iloc[choice];st.write({k:t[k] for k in ['Segnale','Ingresso','Uscita','Motivo','Stop','Target','PnL netto']})
                 st.dataframe(x.loc[t.Segnale:t.Uscita,['open','high','low','close','ha_open','ha_close','forces','hull']+list(MODULES)],width='stretch')
-        meta={'version':'1.2','config_id':config_id(ind,rules),'indicatori':asdict(ind),'regole':asdict(rules),'fonte':source,'feed':feed if source=='Alpaca' else None,'prezzi':adjustment,'ticker':s,'inizio':str(start),'fine':str(end),'nota_chiusura':st.session_state.lab_notes.get(s),'inizio_storico_pulito':str(x.index[0].date()),'correzione_attiva':repair_ohlc,'stats':stats,'periodo_effettivo':result['period'],'drawdown_dettaglio':result['drawdown'],'esecuzione':result['run_config'],'correzioni_ohlc_originali':data[s].attrs.get('ohlc_corrections',[])}
-        z=io.BytesIO()
-        with zipfile.ZipFile(z,'w',zipfile.ZIP_DEFLATED) as archive:
-            archive.writestr('configurazione.json',json.dumps(meta,indent=2,default=str))
-            archive.writestr('operazioni.csv',csv_bytes(result['trades']))
-            archive.writestr('indicatori_e_dati.csv',csv_bytes(x))
-            archive.writestr('equity.csv',eq.to_csv())
-        st.download_button('Esporta test completo ZIP',z.getvalue(),f'test_{s}_{config_id(ind,rules)}.zip','application/zip')
+        meta={'version':'1.3','config_id':config_id(ind,rules),'indicatori':asdict(ind),'regole':asdict(rules),'fonte':source,'feed':feed if source=='Alpaca' else None,'prezzi':adjustment,'ticker':s,'inizio':str(start),'fine':str(end),'nota_chiusura':st.session_state.lab_notes.get(s),'inizio_storico_pulito':str(x.index[0].date()),'correzione_attiva':repair_ohlc,'stats':stats,'periodo_effettivo':result['period'],'drawdown_dettaglio':result['drawdown'],'esecuzione':result['run_config'],'correzioni_ohlc_originali':data[s].attrs.get('ohlc_corrections',[])}
+        export_key=signature+run['Calcolato']
+        if st.session_state.get('export_cache',{}).get('key')!=export_key:
+            z=io.BytesIO()
+            with zipfile.ZipFile(z,'w',zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr('configurazione.json',json.dumps(meta,indent=2,default=str))
+                archive.writestr('operazioni.csv',csv_bytes(result['trades']))
+                archive.writestr('indicatori_e_dati.csv',csv_bytes(x))
+                archive.writestr('equity.csv',eq.to_csv())
+            st.session_state.export_cache={'key':export_key,'bytes':z.getvalue()}
+        st.download_button('Esporta test completo ZIP',st.session_state.export_cache['bytes'],f'test_{s}_{config_id(ind,rules)}.zip','application/zip')
 if section=='Confronto':
     st.write('Confronta la configurazione corrente su più ticker, oppure tutte le combinazioni di un piccolo insieme di moduli. Ogni titolo ha un capitale indipendente: non è un portafoglio.')
     chosen=st.multiselect('Ticker da confrontare',list(data),default=list(data)[:min(10,len(data))])
@@ -270,7 +287,7 @@ if section=='Confronto':
     split=st.date_input('Inizio periodo di verifica',value=max(history_start,min(TODAY,date(2023,1,1))),min_value=history_start,max_value=TODAY,help='La graduatoria usa solo la selezione precedente a questa data. Il periodo successivo è mostrato separatamente; dopo averlo osservato non è più una riserva incontaminata.')
     mintr=st.number_input('Minimo trade chiusi in selezione',1,1000,30)
     source_compare=st.checkbox('Confronta Forces Standard e Heikin Ashi',False)
-    compare_signature=json.dumps([config_id(ind,rules),chosen,compare_modes,pool,str(cstart),str(cend),str(split),mintr,source_compare,data_signature])
+    compare_signature=json.dumps([config_id(ind,rules),chosen,compare_modes,pool,str(cstart),str(cend),str(split),mintr,source_compare,data_signature,revision])
     if st.session_state.get('compare_signature')!=compare_signature:st.session_state.pop('comparison',None)
     if st.button('Esegui confronto',disabled=not bool(chosen)):
         try:
@@ -289,7 +306,7 @@ if section=='Confronto':
                         rr=replace(rules,modules=tuple(combo));row={'Ticker':symbol,'Moduli':' + '.join(MODULES[k] for k in combo),'Forces':src,'ID':config_id(cfg,rr)}
                         try:
                             for label,begin,finish in [('Selezione',cstart,split-timedelta(days=1)),('Verifica',split,cend)]:
-                                xx=prepare_features(data[symbol],cfg,str(begin),str(finish))
+                                xx=get_features(symbol,cfg,str(begin),str(finish))
                                 res=backtest(xx,rr,str(begin),str(finish))
                                 row.update({label+' · '+k:v for k,v in res['stats'].items() if k in ['Trade chiusi','Rendimento %','Max drawdown %','Profit factor']})
                             output.append(row)
@@ -319,6 +336,10 @@ if section=='Dati e metodo':
 
 **Validazione**: confrontare prima gli indicatori con TradingView, poi scegliere sul periodo di selezione e controllare la verifica. Una combinazione migliore nello storico non è automaticamente robusta. Nessuna condizione Balance è presente.
 
+**EMA prezzo**: modulo facoltativo, default OFF, periodo 21 modificabile. Close standard sopra EMA, senza vincolo di incrocio o pendenza. La regola di uscita resta quella scelta. La media disegnata usa sempre prezzi standard.
+
+**Prestazioni**: nel Backtest gli indicatori vengono calcolati solo premendo Esegui, per il titolo scelto. Costi/stop/uscite riutilizzano gli indicatori; il confronto riutilizza gli stessi calcoli fra combinazioni. La cache viene invalidata al ricaricamento dei dati.
+
 **Anomalie OHLC**: lo screener usa soltanto l’ultimo tratto pulito con riscaldamento sufficiente. Il backtest viene bloccato se il periodo contiene anomalie o lo storico pulito precedente non basta. La correzione High/Low è facoltativa ed esplicita. Le candele aperte sono escluse prima di controllare gli OHLC.''')
     quality=[]
     for s,df in data.items():quality.append({'Ticker':s,'Prima barra':str(df.index[0].date()),'Ultima chiusa':str(df.index[-1].date()),'Barre':len(df),'Barre anomale non corrette':int(invalid_ohlc(df).sum()),'Ultima anomalia':str(df.index[invalid_ohlc(df)][-1].date()) if invalid_ohlc(df).any() else '—','Chiusura':st.session_state.lab_notes.get(s,'')})
@@ -330,6 +351,7 @@ if section=='Dati e metodo':
         if df.attrs.get('ohlc_corrections'):
             with st.expander('Barre originali corrette · '+symbol):st.dataframe(pd.DataFrame(df.attrs['ohlc_corrections']),width='stretch')
     st.download_button('Scarica lista di esempio',Path(__file__).with_name('lista_esempio.txt').read_bytes(),'lista_esempio.txt','text/plain')
+
 
 
 

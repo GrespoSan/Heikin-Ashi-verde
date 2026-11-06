@@ -39,6 +39,21 @@ Feed SIP o IEX esplicito, senza fallback. Accesso secondo autorizzazioni dell'ac
 richieste storiche terminate almeno 20 minuti prima di adesso. Nessun ordine inviato.
 Il plugin ChatGPT non fornisce automaticamente credenziali all'app.
 
+## Prestazioni e filtro EMA (v1.3)
+
+Il Backtest non ricalcola l'intero universo quando cambia un parametro.
+Calcola gli indicatori del solo titolo selezionato al submit, con cache LRU per sessione
+(revisione dati, titolo, parametri indicatori e periodo). Modifiche a costi, stop,
+uscite e moduli riutilizzano gli indicatori. Anche il confronto riusa i calcoli fra
+combinazioni. Export ZIP costruito una volta per esecuzione. Ricaricare i dati invalida
+la cache; cache limitata a 96 serie per sessione.
+
+Nuovo modulo facoltativo Prezzo sopra EMA, default OFF: close standard strettamente
+superiore alla EMA configurata (periodo iniziale 21). La EMA è inizializzata al primo
+close disponibile; il filtro richiede almeno il numero di barre del periodo.
+Non richiede incrocio né pendenza positiva, e non aggiunge uscite automatiche.
+EMA disegnata sul grafico e inclusa nelle esportazioni e nei confronti.
+
 ## Regole
 
 - HA, Hull segnale recente, Hull trend, Forces prevalenza, rafforzamento, direzione.
@@ -116,4 +131,5 @@ Riferimenti:
 - https://ranaroussi.github.io/yfinance/reference/api/yfinance.download.html
 - https://alpaca.markets/sdks/python/api_reference/data/stock/requests.html
 - https://docs.streamlit.io/develop/api-reference/app-testing
+
 
