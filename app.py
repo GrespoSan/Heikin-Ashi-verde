@@ -15,7 +15,22 @@ from engine import Indicators,Rules,MODULES,calculate,evaluate,backtest,parse_sy
 from data_sources import yahoo,alpaca,read_import,completed_bars
 st.set_page_config(page_title='G. Trend Lab',page_icon='🧪',layout='wide')
 st.title('G. Trend Lab')
-st.caption('v1.2 · Screener e laboratorio LONG · Heikin Ashi, Hull e Forces')
+st.caption('v1.2.1 · Screener e laboratorio LONG · Heikin Ashi, Hull e Forces')
+# I risultati sono effimeri e dipendono dallo schema del motore, non solo dai parametri.
+SESSION_SCHEMA = 'trend-lab-results-2'
+def compatible_result(value):
+    return (isinstance(value,dict) and value.get('schema')==2
+        and all(k in value for k in ('stats','trades','equity','period','drawdown','run_config'))
+        and all(isinstance(value.get(k),dict) for k in ('stats','period','drawdown','run_config'))
+        and all(k in value['period'] for k in ('Prima barra calcolata','Ultima barra calcolata','Barre nel test'))
+        and all(k in value['stats'] for k in ('Peggior trade %','Massimo perdite consecutive')))
+if st.session_state.get('result_session_schema') != SESSION_SCHEMA:
+    had_results=st.session_state.get('lab_results') is not None
+    for name in ('lab_results','lab_features','bt_signature','comparison','compare_signature','compare_errors'):
+        st.session_state.pop(name,None)
+    st.session_state.result_session_schema=SESSION_SCHEMA
+    if had_results:st.info('App aggiornata: il precedente risultato è stato azzerato. Dati e impostazioni restano disponibili; premi Esegui backtest per ricalcolare.')
+
 TODAY=pd.Timestamp.now(tz='Europe/Rome').date()
 HELP={
 'ha':'Ultima candela HA chiusa verde (close HA ≥ open HA). Non richiede una nuova inversione.',
@@ -195,10 +210,17 @@ if section=='Backtest':
             st.session_state.lab_features=x
             result_run=backtest(x,rules,str(start),str(end))
             result_run['run_config']={'Ticker':s,'Timeframe':timeframe,'Configurazione':config_id(ind,rules),'Forces':fsource,'SMA':int(sma),'EMA':int(ema),'Uscita':exit_mode,'Calcolato':pd.Timestamp.now(tz='Europe/Rome').isoformat()}
+            if not compatible_result(result_run):raise ValueError('Motore in aggiornamento: il risultato usa un formato precedente. Ricarica la pagina e ripeti Esegui backtest.')
             st.session_state.lab_results=result_run;st.session_state.bt_signature=signature
         except ValueError as exc:st.error(str(exc))
     result=st.session_state.get('lab_results')
+    if result is not None and (not compatible_result(result) or 'lab_features' not in st.session_state):
+        st.session_state.pop('lab_results',None)
+        st.session_state.pop('bt_signature',None)
+        result=None
+        st.info('Il risultato salvato appartiene a una versione precedente o è incompleto. Premi Esegui backtest per ricalcolarlo con il nuovo formato.')
     if result:
+
         x=st.session_state.lab_features
         period=result['period'];run=result['run_config']
         st.success(f"Risultato calcolato: {run['Ticker']} · {run['Timeframe']} · {period['Prima barra calcolata']} → {period['Ultima barra calcolata']} · {period['Barre nel test']} barre")
@@ -308,5 +330,6 @@ if section=='Dati e metodo':
         if df.attrs.get('ohlc_corrections'):
             with st.expander('Barre originali corrette · '+symbol):st.dataframe(pd.DataFrame(df.attrs['ohlc_corrections']),width='stretch')
     st.download_button('Scarica lista di esempio',Path(__file__).with_name('lista_esempio.txt').read_bytes(),'lista_esempio.txt','text/plain')
+
 
 

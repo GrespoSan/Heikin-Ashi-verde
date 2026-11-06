@@ -261,6 +261,7 @@ def backtest(x,rules,start=None,end=None):
     opened=None
     if pos:
         opened={'Ingresso':pos['date'],'Prezzo':pos['entry'],'Quantità':pos['qty'],'Stop':pos['stop'],'Target':pos['target'],'PnL non realizzato':(x.close.iloc[ids[-1]]-pos['entry'])*pos['qty']*point,'Uscita al prossimo open':pending_exit}
-    return {'stats':stats,'trades':t,'equity':eq,'open':opened,'signal':signal,'period':period,'drawdown':drawdown_detail}
+    return {'schema':2,'stats':stats,'trades':t,'equity':eq,'open':opened,'signal':signal,'period':period,'drawdown':drawdown_detail}
+
 
 
