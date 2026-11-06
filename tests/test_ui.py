@@ -21,3 +21,24 @@ def test_app_screener_backtest_comparison():
             assert not at.exception
             assert at.session_state[state] is not None
 
+
+
+def test_submitted_period_is_displayed_and_previous_stats_are_replaced():
+    from datetime import date
+    rng=np.random.default_rng(77);idx=pd.bdate_range('2010-01-01','2026-10-30');c=20+np.cumsum(rng.normal(0,.03,len(idx)));o=c+rng.normal(0,.03,len(idx))
+    data=pd.DataFrame({'open':o,'high':np.maximum(o,c)+.02,'low':np.minimum(o,c)-.02,'close':c,'volume':100},index=idx)
+    with patch('data_sources.yahoo',return_value=data):
+        at=AppTest.from_file(str(Path(__file__).parents[1]/'app.py'),default_timeout=60).run()
+        next(b for b in at.button if b.label=='Carica dati e aggiorna screener').click().run()
+        at.radio(key='section').set_value('Backtest').run()
+        next(b for b in at.button if b.label=='Esegui backtest').click().run()
+        before=at.session_state['lab_results']['stats']['Trade chiusi']
+        at.date_input(key='bt_start').set_value(date(2024,7,19))
+        at.date_input(key='bt_end').set_value(date(2026,10,30))
+        next(b for b in at.button if b.label=='Esegui backtest').click().run()
+        assert not at.exception
+        result=at.session_state['lab_results']
+        assert result['period']['Inizio richiesto']=='2024-07-19'
+        assert result['period']['Prima barra calcolata']=='2024-07-19'
+        assert result['stats']['Trade chiusi']<before
+        assert any('2024-07-19' in s.value and 'Risultato calcolato' in s.value for s in at.success)

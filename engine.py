@@ -241,10 +241,26 @@ def backtest(x,rules,start=None,end=None):
         equity.append((x.index[i],marked))
     eq=pd.Series(dict(equity),name='Equity');t=pd.DataFrame(trades)
     pnl=t['PnL netto'] if len(t) else pd.Series(dtype=float)
-    gains=pnl[pnl>0].sum();loss=-pnl[pnl<0].sum();peak=np.maximum.accumulate(np.r_[r.capital,eq.to_numpy()]);dd=(np.r_[r.capital,eq.to_numpy()]/peak-1).min()
-    stats={'Trade chiusi':len(t),'Rendimento %':(eq.iloc[-1]/r.capital-1)*100,'Max drawdown %':dd*100,'Win rate %':(pnl>0).mean()*100 if len(pnl) else 0.0,'Profit factor':gains/loss if loss else np.nan,'PnL chiuso':pnl.sum(),'Posizione aperta':pos is not None,'Ingressi saltati':skipped,'Equity finale':eq.iloc[-1]}
+    gains=pnl[pnl>0].sum();loss=-pnl[pnl<0].sum()
+    values=np.r_[r.capital,eq.to_numpy()]
+    peaks=np.maximum.accumulate(values);drawdowns=values/peaks-1
+    trough_i=int(np.argmin(drawdowns));peak_i=int(np.argmax(values[:trough_i+1]))
+    dd=float(drawdowns[trough_i])
+    dd_peak_date=None if peak_i==0 else eq.index[peak_i-1]
+    dd_trough_date=None if trough_i==0 else eq.index[trough_i-1]
+    drawdown_detail={'Picco data':dd_peak_date,'Picco equity':float(values[peak_i]),'Minimo data':dd_trough_date,'Minimo equity':float(values[trough_i]),'Calo monetario':float(values[trough_i]-values[peak_i]),'Drawdown %':dd*100,'Formula':'(Equity minimo / Equity picco − 1) × 100'}
+    worst_trade=float(t['Netto % capitale ingresso'].min()) if len(t) else None
+    max_streak=streak=0
+    for value in pnl:
+        streak=streak+1 if value<0 else 0
+        max_streak=max(max_streak,streak)
+    stats={'Trade chiusi':len(t),'Rendimento %':(eq.iloc[-1]/r.capital-1)*100,'Max drawdown %':dd*100,'Win rate %':(pnl>0).mean()*100 if len(pnl) else 0.0,'Profit factor':gains/loss if loss else np.nan,'PnL chiuso':pnl.sum(),'Posizione aperta':pos is not None,'Ingressi saltati':skipped,'Equity finale':eq.iloc[-1],'Peggior trade %':worst_trade,'Massimo perdite consecutive':max_streak}
+    period={'Inizio richiesto':str(a.date()),'Fine richiesta':str(b.date()),'Prima barra calcolata':str(eq.index[0].date()),'Ultima barra calcolata':str(eq.index[-1].date()),'Barre nel test':len(eq)}
+    if len(t):
+        if (t.Ingresso<eq.index[0]).any() or (t.Uscita>eq.index[-1]).any():raise ValueError('Risultati fuori periodo: ricalcolare il test.')
     opened=None
     if pos:
         opened={'Ingresso':pos['date'],'Prezzo':pos['entry'],'Quantità':pos['qty'],'Stop':pos['stop'],'Target':pos['target'],'PnL non realizzato':(x.close.iloc[ids[-1]]-pos['entry'])*pos['qty']*point,'Uscita al prossimo open':pending_exit}
-    return {'stats':stats,'trades':t,'equity':eq,'open':opened,'signal':signal}
+    return {'stats':stats,'trades':t,'equity':eq,'open':opened,'signal':signal,'period':period,'drawdown':drawdown_detail}
+
 

@@ -128,3 +128,33 @@ def test_weekly_keeps_bad_daily_quality_even_if_aggregate_looks_valid():
     df.loc[df.index[1],'high']=9.8
     closed,_=completed_bars(df,'AMP.MI','Italia',timeframe='Weekly',now='2026-11-01T14:00Z')
     assert len(closed)==1 and not closed.ohlc_valid.iloc[0]
+
+
+def test_result_period_and_drawdown_are_bound_to_requested_dates():
+    from engine import prepare_features
+    df=long_daily()
+    # Variazioni causali per produrre segnali sia dentro sia fuori dal periodo.
+    df['close']=10+.3*np.sin(np.arange(len(df))/3)
+    xx=prepare_features(df,Indicators(),str(df.index[150].date()),str(df.index[260].date()))
+    result=backtest(xx,Rules(),str(df.index[150].date()),str(df.index[260].date()))
+    assert result['period']['Barre nel test']==111
+    assert result['equity'].index[0]==df.index[150]
+    assert result['equity'].index[-1]==df.index[260]
+    t=result['trades']
+    if len(t):assert (t.Ingresso>=df.index[150]).all() and (t.Uscita<=df.index[260]).all()
+    detail=result['drawdown']
+    assert np.isclose((detail['Minimo equity']/detail['Picco equity']-1)*100,result['stats']['Max drawdown %'])
+
+def test_compounded_losses_create_larger_account_drawdown_than_single_trade():
+    x=synthetic();x['ha']=[False,True,False,True,False,True,False,False]
+    x['forces_positive']=True
+    # Entry 10, exit 9, ripetuto: singolo trade -10%, conto -27.1%.
+    x.loc[x.index[[2,4,6]],'open']=10.
+    x.loc[x.index[[3,5,7]],'open']=9.
+    x.loc[x.index[[2,4,6]],'close']=10.
+    x.loc[x.index[[3,5,7]],'close']=9.
+    result=backtest(x,Rules(modules=('ha',),commission_pct=0,slippage_pct=0))
+    assert result['stats']['Trade chiusi']==3
+    assert np.isclose(result['stats']['Peggior trade %'],-10.)
+    assert np.isclose(result['stats']['Max drawdown %'],-27.1)
+    assert result['stats']['Massimo perdite consecutive']==3

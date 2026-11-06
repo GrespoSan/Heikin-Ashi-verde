@@ -15,7 +15,7 @@ from engine import Indicators,Rules,MODULES,calculate,evaluate,backtest,parse_sy
 from data_sources import yahoo,alpaca,read_import,completed_bars
 st.set_page_config(page_title='G. Trend Lab',page_icon='🧪',layout='wide')
 st.title('G. Trend Lab')
-st.caption('v1.1 · Screener e laboratorio LONG · Heikin Ashi, Hull e Forces')
+st.caption('v1.2 · Screener e laboratorio LONG · Heikin Ashi, Hull e Forces')
 TODAY=pd.Timestamp.now(tz='Europe/Rome').date()
 HELP={
 'ha':'Ultima candela HA chiusa verde (close HA ≥ open HA). Non richiede una nuova inversione.',
@@ -117,7 +117,7 @@ try:
     if len(symbols)>150:raise ValueError('Massimo 150 ticker per esecuzione; suddividere la lista.')
 except ValueError as e:st.error(str(e));st.stop()
 import_hash=hashlib.sha256(imported.getvalue()).hexdigest() if imported else ''
-data_signature=json.dumps(['1.1',source,market,timeframe,str(history_start),adjustment,feed,symbols,import_hash,repair_ohlc])
+data_signature=json.dumps(['1.2',source,market,timeframe,str(history_start),adjustment,feed,symbols,import_hash,repair_ohlc])
 if st.session_state.get('data_signature')!=data_signature:
     st.session_state.pop('lab_data',None);st.session_state.pop('lab_results',None)
 st.session_state.data_signature=data_signature
@@ -177,25 +177,48 @@ if section=='Backtest':
     s=st.selectbox('Strumento',list(data),key='bt_symbol');raw_test=data[s]
     x=features[s] if s in features else calculate(raw_test,ind)
     earliest=x.index[min(len(x)-1,warmup_bars(ind))].date()
-    c1,c2=st.columns(2)
-    start=c1.date_input('Inizio test',value=earliest,key='bt_start')
-    end=c2.date_input('Fine test',value=x.index[-1].date(),key='bt_end')
+    with st.form('backtest_period_form'):
+        c1,c2=st.columns(2)
+        start=c1.date_input('Inizio test',value=earliest,min_value=raw_test.index[0].date(),max_value=raw_test.index[-1].date(),key='bt_start')
+        end=c2.date_input('Fine test',value=raw_test.index[-1].date(),min_value=raw_test.index[0].date(),max_value=raw_test.index[-1].date(),key='bt_end')
+        st.caption('Premi Esegui backtest per applicare le date. Il riepilogo sottostante riporta sempre il periodo dell’ultima esecuzione, non le modifiche ancora da inviare.')
+        submitted=st.form_submit_button('Esegui backtest',disabled=not bool(mods))
     signature=json.dumps([config_id(ind,rules),s,str(start),str(end),data_signature])
     if st.session_state.get('bt_signature')!=signature:st.session_state.pop('lab_results',None)
-    if st.button('Esegui backtest',disabled=not bool(mods)):
+    if submitted:
+        st.session_state.pop('lab_results',None)
         try:
             if '=F' in s and instrument=='Futures (contratto singolo)':raise ValueError('Il ticker Yahoo =F è una serie continua: scegliere Studio del segnale oppure importare un contratto singolo.')
             if instrument=='Azioni / ETF / spot' and '=F' in s:raise ValueError('Per una serie =F scegliere «Serie continua: studio del segnale».')
             if instrument=='Futures (contratto singolo)' and adjustment=='Tutti gli aggiustamenti':raise ValueError('Per un singolo contratto usare prezzi non rettificati per dividendi.')
             x=prepare_features(raw_test,ind,str(start),str(end))
             st.session_state.lab_features=x
-            st.session_state.lab_results=backtest(x,rules,str(start),str(end));st.session_state.bt_signature=signature
+            result_run=backtest(x,rules,str(start),str(end))
+            result_run['run_config']={'Ticker':s,'Timeframe':timeframe,'Configurazione':config_id(ind,rules),'Forces':fsource,'SMA':int(sma),'EMA':int(ema),'Uscita':exit_mode,'Calcolato':pd.Timestamp.now(tz='Europe/Rome').isoformat()}
+            st.session_state.lab_results=result_run;st.session_state.bt_signature=signature
         except ValueError as exc:st.error(str(exc))
     result=st.session_state.get('lab_results')
     if result:
         x=st.session_state.lab_features
+        period=result['period'];run=result['run_config']
+        st.success(f"Risultato calcolato: {run['Ticker']} · {run['Timeframe']} · {period['Prima barra calcolata']} → {period['Ultima barra calcolata']} · {period['Barre nel test']} barre")
+        st.caption(f"Forces {run['Forces']} {run['SMA']}/{run['EMA']} · uscita {run['Uscita']} · calcolo {run['Calcolato']} · ID {run['Configurazione']}")
         stats=result['stats'];cs=st.columns(4)
-        for col,k in zip(cs,['Rendimento %','Max drawdown %','Trade chiusi','Win rate %']):col.metric(k,f'{stats[k]:.2f}' if k!='Trade chiusi' else stats[k])
+        for col,k in zip(cs,['Rendimento %','Max drawdown %','Trade chiusi','Win rate %']):
+            label='Max drawdown conto %' if k=='Max drawdown %' else k
+            help_text='Massimo calo cumulato dell’equity da un precedente picco, su tutto il periodo. Non è la perdita di un singolo trade. Comprende costi e posizioni aperte al close.' if k=='Max drawdown %' else None
+            col.metric(label,f'{stats[k]:.2f}' if k!='Trade chiusi' else stats[k],help=help_text)
+        worst=stats['Peggior trade %']
+        st.caption(f"Peggior trade chiuso: {worst:.2f}% del capitale all’ingresso · massima sequenza di perdite: {stats['Massimo perdite consecutive']}" if worst is not None else 'Nessun trade chiuso nel periodo.')
+        with st.expander('Come si forma il drawdown del conto'):
+            detail=result['drawdown']
+            peak_label=str(detail['Picco data'].date()) if detail['Picco data'] is not None else 'capitale iniziale'
+            trough_label=str(detail['Minimo data'].date()) if detail['Minimo data'] is not None else 'inizio test'
+            st.write(f"Picco: {detail['Picco equity']:.2f} {currency} ({peak_label}). Minimo successivo: {detail['Minimo equity']:.2f} {currency} ({trough_label}).")
+            st.write(f"({detail['Minimo equity']:.2f} / {detail['Picco equity']:.2f} − 1) × 100 = {detail['Drawdown %']:.2f}%.")
+            st.write('L’uscita HA rossa viene decisa alla chiusura della prima HA rossa ed eseguita all’open successivo. Non impedisce perdite nella candela rossa né gap avversi. Molte perdite piccole possono accumularsi nel conto.')
+            if not result['trades'].empty:
+                st.dataframe(result['trades'].sort_values('Netto % capitale ingresso').head(5),hide_index=True,width='stretch')
         st.caption(f"Profit factor: {stats['Profit factor']:.2f} · Equity finale: {stats['Equity finale']:.2f} {currency} · Include valorizzazione delle posizioni aperte; nessuna liquidazione artificiale a fine test.")
         show_chart(x.loc[:pd.Timestamp(end)],result,key='backtest')
         eq=result['equity'];base=x.loc[eq.index,'close']/x.loc[eq.index[0],'open']*capital
@@ -208,7 +231,7 @@ if section=='Backtest':
                 trades=result['trades'];choice=st.selectbox('Operazione',range(len(trades)),format_func=lambda j:f"{trades.iloc[j]['Ingresso'].date()} → {trades.iloc[j]['Uscita'].date()}")
                 t=trades.iloc[choice];st.write({k:t[k] for k in ['Segnale','Ingresso','Uscita','Motivo','Stop','Target','PnL netto']})
                 st.dataframe(x.loc[t.Segnale:t.Uscita,['open','high','low','close','ha_open','ha_close','forces','hull']+list(MODULES)],width='stretch')
-        meta={'version':'1.1','config_id':config_id(ind,rules),'indicatori':asdict(ind),'regole':asdict(rules),'fonte':source,'feed':feed if source=='Alpaca' else None,'prezzi':adjustment,'ticker':s,'inizio':str(start),'fine':str(end),'nota_chiusura':st.session_state.lab_notes.get(s),'inizio_storico_pulito':str(x.index[0].date()),'correzione_attiva':repair_ohlc,'stats':stats,'correzioni_ohlc_originali':data[s].attrs.get('ohlc_corrections',[])}
+        meta={'version':'1.2','config_id':config_id(ind,rules),'indicatori':asdict(ind),'regole':asdict(rules),'fonte':source,'feed':feed if source=='Alpaca' else None,'prezzi':adjustment,'ticker':s,'inizio':str(start),'fine':str(end),'nota_chiusura':st.session_state.lab_notes.get(s),'inizio_storico_pulito':str(x.index[0].date()),'correzione_attiva':repair_ohlc,'stats':stats,'periodo_effettivo':result['period'],'drawdown_dettaglio':result['drawdown'],'esecuzione':result['run_config'],'correzioni_ohlc_originali':data[s].attrs.get('ohlc_corrections',[])}
         z=io.BytesIO()
         with zipfile.ZipFile(z,'w',zipfile.ZIP_DEFLATED) as archive:
             archive.writestr('configurazione.json',json.dumps(meta,indent=2,default=str))
@@ -221,8 +244,8 @@ if section=='Confronto':
     chosen=st.multiselect('Ticker da confrontare',list(data),default=list(data)[:min(10,len(data))])
     compare_modes=st.radio('Configurazioni',['Solo corrente','Combinazioni dei moduli scelti'],horizontal=True)
     pool=st.multiselect('Moduli candidati',list(MODULES),default=['ha','forces_positive','hull_trend'],format_func=lambda k:MODULES[k],disabled=compare_modes=='Solo corrente')
-    c1,c2=st.columns(2);cstart=c1.date_input('Inizio confronto',value=max(history_start,date(2015,1,1)),key='cmp_start');cend=c2.date_input('Fine confronto',value=TODAY,key='cmp_end')
-    split=st.date_input('Inizio periodo di verifica',value=date(2023,1,1),help='La graduatoria usa solo la selezione precedente a questa data. Il periodo successivo è mostrato separatamente; dopo averlo osservato non è più una riserva incontaminata.')
+    c1,c2=st.columns(2);cstart=c1.date_input('Inizio confronto',value=max(history_start,date(2015,1,1)),min_value=history_start,max_value=TODAY,key='cmp_start');cend=c2.date_input('Fine confronto',value=TODAY,min_value=history_start,max_value=TODAY,key='cmp_end')
+    split=st.date_input('Inizio periodo di verifica',value=max(history_start,min(TODAY,date(2023,1,1))),min_value=history_start,max_value=TODAY,help='La graduatoria usa solo la selezione precedente a questa data. Il periodo successivo è mostrato separatamente; dopo averlo osservato non è più una riserva incontaminata.')
     mintr=st.number_input('Minimo trade chiusi in selezione',1,1000,30)
     source_compare=st.checkbox('Confronta Forces Standard e Heikin Ashi',False)
     compare_signature=json.dumps([config_id(ind,rules),chosen,compare_modes,pool,str(cstart),str(cend),str(split),mintr,source_compare,data_signature])
@@ -285,4 +308,5 @@ if section=='Dati e metodo':
         if df.attrs.get('ohlc_corrections'):
             with st.expander('Barre originali corrette · '+symbol):st.dataframe(pd.DataFrame(df.attrs['ohlc_corrections']),width='stretch')
     st.download_button('Scarica lista di esempio',Path(__file__).with_name('lista_esempio.txt').read_bytes(),'lista_esempio.txt','text/plain')
+
 
