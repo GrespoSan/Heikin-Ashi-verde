@@ -1,0 +1,8 @@
+# Titoli italiani — un ticker per riga o separati da virgole
+A2A.MI
+AMP.MI
+CPR.MI
+ENEL.MI
+ENI.MI
+ISP.MI
+UCG.MI
