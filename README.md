@@ -56,6 +56,14 @@ Il plugin ChatGPT non fornisce automaticamente credenziali all'app.
 - Warm-up almeno 100 barre, elevato secondo i parametri. Il filtro HA usa la candela
   stessa del segnale: non un ulteriore shift, dato che l'esecuzione è già il giorno dopo.
 
+## Controllo qualità OHLC
+
+Di default le serie con OHLC incoerenti sono rifiutate con date e conteggio.
+L'opzione esplicita Correggi High/Low incoerenti amplia il range ai prezzi Open/Close,
+senza modificare Open e Close. I valori originali sono visibili in Dati e metodo e
+nell'esportazione ZIP. Non è una ricostruzione dei veri estremi intraday; può cambiare
+segnali, stop e target. Ripetere i confronti mantenendo la stessa politica dati.
+
 ## Dati e limiti
 
 Equity: calendari XMIL/XNYS e attesa 15 minuti dopo il close. Futures/24h: esclusione

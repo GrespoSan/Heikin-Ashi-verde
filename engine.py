@@ -63,7 +63,7 @@ def parse_symbols(text, market='Italia', source='Yahoo'):
             if not re.fullmatch(r'[A-Z0-9.^=/_-]+',t): raise ValueError(f'Ticker non valido: {t}')
             if t not in out: out.append(t)
     return out
-def normalize_bars(df):
+def normalize_bars(df,repair=False):
     x=df.copy()
     x.columns=[str(c).lower().strip() for c in x.columns]
     x=x.rename(columns={'o':'open','h':'high','l':'low','c':'close','v':'volume','t':'timestamp'})
@@ -84,8 +84,15 @@ def normalize_bars(df):
     if x[['open','high','low','close']].isna().any().any(): raise ValueError('OHLC mancanti o non numerici: correggere la fonte.')
     if not np.isfinite(x[['open','high','low','close']].to_numpy()).all(): raise ValueError('OHLC non finiti.')
     if x.index.has_duplicates: raise ValueError('Date duplicate: caricare una sola serie Daily per simbolo.')
-    if (x.high<x[['open','close','low']].max(axis=1)-1e-9).any() or (x.low>x[['open','close','high']].min(axis=1)+1e-9).any():
-        raise ValueError('OHLC incoerenti: high/low non contengono open/close.')
+    bad=(x.high<x[['open','close','low']].max(axis=1)-1e-9)|(x.low>x[['open','close','high']].min(axis=1)+1e-9)
+    if bad.any():
+        if not repair:
+            dates=', '.join(str(d.date()) for d in x.index[bad][:3])
+            raise ValueError(f'{int(bad.sum())} barre OHLC incoerenti ({dates}). Scegli un periodo diverso o abilita la correzione esplicita High/Low.')
+        originals=x.loc[bad].reset_index().copy()
+        x.attrs['ohlc_corrections']=json.loads(originals.to_json(orient='records',date_format='iso'))
+        x['high']=x[['high','open','close']].max(axis=1)
+        x['low']=x[['low','open','close']].min(axis=1)
     return x.sort_index()
 def resample_weekly(df):
     return df.resample('W-FRI').agg({'open':'first','high':'max','low':'min','close':'last','volume':'sum'}).dropna(subset=['open'])

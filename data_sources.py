@@ -5,20 +5,20 @@ import json
 import pandas as pd
 from engine import normalize_bars, resample_weekly
 
-def read_import(payload,name):
+def read_import(payload,name,repair=False):
     if name.lower().endswith('.json'):
         obj=json.loads(payload.decode('utf-8-sig'))
         bars=obj.get('bars') if isinstance(obj,dict) else obj
         if not isinstance(bars,list):raise ValueError('JSON: atteso array di barre o oggetto con bars[].')
-        return normalize_bars(pd.DataFrame(bars))
-    return normalize_bars(pd.read_csv(io.BytesIO(payload),sep=None,engine='python'))
-def yahoo(symbol,start,end,adjusted):
+        return normalize_bars(pd.DataFrame(bars),repair)
+    return normalize_bars(pd.read_csv(io.BytesIO(payload),sep=None,engine='python'),repair)
+def yahoo(symbol,start,end,adjusted,repair=False):
     import yfinance as yf
     df=yf.download(symbol,start=start,end=end,interval='1d',auto_adjust=adjusted,progress=False,threads=False,timeout=20)
     if df is None or df.empty:raise ValueError(f'{symbol}: Yahoo non ha restituito dati.')
     if isinstance(df.columns,pd.MultiIndex):df.columns=df.columns.get_level_values(0)
-    return normalize_bars(df)
-def alpaca(symbol,start,end,key,secret,feed='sip',adjustment='split'):
+    return normalize_bars(df,repair)
+def alpaca(symbol,start,end,key,secret,feed='sip',adjustment='split',repair=False):
     if not key or not secret:raise ValueError('Configurare ALPACA_API_KEY e ALPACA_SECRET_KEY nei Secrets Streamlit.')
     from alpaca.data.historical import StockHistoricalDataClient
     from alpaca.data.requests import StockBarsRequest
@@ -31,7 +31,7 @@ def alpaca(symbol,start,end,key,secret,feed='sip',adjustment='split'):
     if bars.empty:raise ValueError(f'{symbol}: Alpaca non ha restituito dati.')
     bars=bars.xs(symbol,level='symbol').copy()
     bars.index=bars.index.tz_convert('America/New_York').tz_localize(None).normalize()
-    return normalize_bars(bars)
+    return normalize_bars(bars,repair)
 def completed_bars(df,symbol,market,timeframe='Daily',now=None):
     """Equity: calendario della borsa. Futures/24h: esclusa prudentemente tutta la data UTC corrente."""
     now=pd.Timestamp.now(tz='UTC') if now is None else pd.Timestamp(now)

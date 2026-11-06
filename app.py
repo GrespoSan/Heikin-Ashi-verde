@@ -29,9 +29,9 @@ def secrets_value(k):
     try:return str(st.secrets.get(k,''))
     except (FileNotFoundError,st.errors.StreamlitSecretNotFoundError):return ''
 @st.cache_data(ttl=900,max_entries=120,show_spinner=False)
-def fetch_cached(symbol,start,end,source,adjustment,feed,_key='',_secret='',account_scope=''):
-    if source=='Yahoo':return yahoo(symbol,start,end,adjustment=='Tutti gli aggiustamenti')
-    return alpaca(symbol,start,end,_key,_secret,feed,'all' if adjustment=='Tutti gli aggiustamenti' else 'split')
+def fetch_cached(symbol,start,end,source,adjustment,feed,_key='',_secret='',account_scope='',repair=False):
+    if source=='Yahoo':return yahoo(symbol,start,end,adjustment=='Tutti gli aggiustamenti',repair)
+    return alpaca(symbol,start,end,_key,_secret,feed,'all' if adjustment=='Tutti gli aggiustamenti' else 'split',repair)
 def csv_bytes(df):return df.to_csv(index=True).encode('utf-8-sig')
 def show_chart(x,result=None,key='chart'):
     chart_type=st.radio('Candele nel grafico',['Standard','Heikin Ashi'],horizontal=True,key=key+'_candles')
@@ -62,7 +62,8 @@ with st.sidebar:
     timeframe=st.selectbox('Timeframe',['Daily','Weekly'])
     history_start=st.date_input('Inizio storico',value=date(2010,1,1),max_value=TODAY)
     adjustment=st.selectbox('Prezzi',['Solo split / non rettificare dividendi','Tutti gli aggiustamenti'],help='Yahoo auto_adjust=False: prezzi OHLC generalmente corretti per split. True: anche rettifica per dividendi. Il laboratorio non accredita dividendi separatamente: dichiarare sempre il tipo di serie.')
-    feed='sip'
+    repair_ohlc=st.checkbox('Correggi High/Low incoerenti',False,help='Solo se abilitato: amplia High/Low per includere Open e Close, senza modificare questi ultimi. Le barre originali vengono registrate e incluse nell’esportazione. Le correzioni possono influenzare segnali, stop e target; di default la serie incoerente è rifiutata.')
+    feed='sip' 
     if source=='Alpaca':
         feed=st.selectbox('Feed Alpaca',['sip','iex'],help='SIP consolidato; IEX singola borsa. Nessun fallback automatico. Le autorizzazioni dipendono dall’account.')
         st.caption('Secrets richiesti: ALPACA_API_KEY e ALPACA_SECRET_KEY. Solo dati: nessun ordine viene inviato.')
@@ -115,7 +116,7 @@ try:
     if len(symbols)>150:raise ValueError('Massimo 150 ticker per esecuzione; suddividere la lista.')
 except ValueError as e:st.error(str(e));st.stop()
 import_hash=hashlib.sha256(imported.getvalue()).hexdigest() if imported else ''
-data_signature=json.dumps([source,market,timeframe,str(history_start),adjustment,feed,symbols,import_hash])
+data_signature=json.dumps([source,market,timeframe,str(history_start),adjustment,feed,symbols,import_hash,repair_ohlc])
 if st.session_state.get('data_signature')!=data_signature:
     st.session_state.pop('lab_data',None);st.session_state.pop('lab_results',None)
 st.session_state.data_signature=data_signature
@@ -127,10 +128,12 @@ if st.button('Carica dati e aggiorna screener',type='primary'):
         try:
             if source=='CSV / JSON':
                 if imported is None:raise ValueError('Carica una serie CSV/JSON.')
-                raw=read_import(imported.getvalue(),imported.name)
-            else:raw=fetch_cached(symbol,str(history_start),str(TODAY+timedelta(days=1)),source,adjustment,feed,key,secret,hashlib.sha256(key.encode()).hexdigest()[:12])
+                raw=read_import(imported.getvalue(),imported.name,repair_ohlc)
+            else:raw=fetch_cached(symbol,str(history_start),str(TODAY+timedelta(days=1)),source,adjustment,feed,key,secret,hashlib.sha256(key.encode()).hexdigest()[:12],repair_ohlc)
             raw=raw[raw.index>=pd.Timestamp(history_start)]
             closed,note=completed_bars(raw,symbol,market,timeframe)
+            corrections=raw.attrs.get('ohlc_corrections',[])
+            if corrections:note+=f' High/Low corretti su {len(corrections)} barre (scelta esplicita).';closed.attrs['ohlc_corrections']=corrections
             data[symbol]=closed;notes[symbol]=note
         except Exception as exc:
             # Non stampare messaggi SDK che possono contenere richieste autenticate.
@@ -144,8 +147,8 @@ if not data:
     st.info('Carica la lista.txt oppure usa i ticker proposti, poi premi «Carica dati e aggiorna screener».')
     st.stop()
 features={s:calculate(df,ind) for s,df in data.items()}
-tabs=st.tabs(['Screener','Backtest','Confronto','Dati e metodo'])
-with tabs[0]:
+section=st.radio('Sezione',['Screener','Backtest','Confronto','Dati e metodo'],horizontal=True,key='section')
+if section=='Screener':
     rows=[]
     for s,x in features.items():
         row=x.iloc[-1];known=bool(row.ready);ok=[MODULES[k] for k in mods if known and bool(row[k])];missing=[MODULES[k]+(' · N/D' if not known else '') for k in mods if not known or not bool(row[k])]
@@ -159,7 +162,7 @@ with tabs[0]:
     st.download_button('Scarica screener CSV',csv_bytes(table.drop(columns='mancano')),'screener.csv','text/csv')
     s=st.selectbox('Dettaglio strumento',list(features),key='screen_symbol');show_chart(features[s],key='screen')
     st.caption(st.session_state.lab_notes.get(s,''))
-with tabs[1]:
+if section=='Backtest':
     s=st.selectbox('Strumento',list(features),key='bt_symbol');x=features[s]
     earliest=x.index[min(len(x)-1,max(100,5*int(ema)+int(sma),int(hull)+int(np.sqrt(hull))+2,int(atr)))].date()
     c1,c2=st.columns(2)
@@ -190,7 +193,7 @@ with tabs[1]:
                 trades=result['trades'];choice=st.selectbox('Operazione',range(len(trades)),format_func=lambda j:f"{trades.iloc[j]['Ingresso'].date()} → {trades.iloc[j]['Uscita'].date()}")
                 t=trades.iloc[choice];st.write({k:t[k] for k in ['Segnale','Ingresso','Uscita','Motivo','Stop','Target','PnL netto']})
                 st.dataframe(x.loc[t.Segnale:t.Uscita,['open','high','low','close','ha_open','ha_close','forces','hull']+list(MODULES)],width='stretch')
-        meta={'version':'1.0','config_id':config_id(ind,rules),'indicatori':asdict(ind),'regole':asdict(rules),'fonte':source,'feed':feed if source=='Alpaca' else None,'prezzi':adjustment,'ticker':s,'inizio':str(start),'fine':str(end),'nota_chiusura':st.session_state.lab_notes.get(s),'stats':stats}
+        meta={'version':'1.0','config_id':config_id(ind,rules),'indicatori':asdict(ind),'regole':asdict(rules),'fonte':source,'feed':feed if source=='Alpaca' else None,'prezzi':adjustment,'ticker':s,'inizio':str(start),'fine':str(end),'nota_chiusura':st.session_state.lab_notes.get(s),'stats':stats,'correzioni_ohlc_originali':data[s].attrs.get('ohlc_corrections',[])}
         z=io.BytesIO()
         with zipfile.ZipFile(z,'w',zipfile.ZIP_DEFLATED) as archive:
             archive.writestr('configurazione.json',json.dumps(meta,indent=2,default=str))
@@ -198,7 +201,7 @@ with tabs[1]:
             archive.writestr('indicatori_e_dati.csv',csv_bytes(x))
             archive.writestr('equity.csv',eq.to_csv())
         st.download_button('Esporta test completo ZIP',z.getvalue(),f'test_{s}_{config_id(ind,rules)}.zip','application/zip')
-with tabs[2]:
+if section=='Confronto':
     st.write('Confronta la configurazione corrente su più ticker, oppure tutte le combinazioni di un piccolo insieme di moduli. Ogni titolo ha un capitale indipendente: non è un portafoglio.')
     chosen=st.multiselect('Ticker da confrontare',list(features),default=list(features)[:min(10,len(features))])
     compare_modes=st.radio('Configurazioni',['Solo corrente','Combinazioni dei moduli scelti'],horizontal=True)
@@ -241,7 +244,7 @@ with tabs[2]:
         st.caption('Ordine solo per selezione e campione minimo. Rendimento include mark-to-market delle posizioni aperte. Nessuna ottimizzazione automatica su verifica; titoli di valute diverse non vengono aggregati.')
         st.download_button('Scarica confronto CSV',csv_bytes(df),'confronto.csv','text/csv')
         if st.session_state.get('compare_errors'):st.dataframe(pd.DataFrame(st.session_state.compare_errors).drop_duplicates(),hide_index=True)
-with tabs[3]:
+if section=='Dati e metodo':
     st.markdown('''**Regole di esecuzione**: decisioni su candele chiuse; entrate e uscite da indicatore all’apertura successiva. Stop e target possono eseguire intrabar. Se entrambi sono toccati nella stessa barra, si assume lo stop prima. Le HA generano segnali: non sono prezzi di esecuzione.
 
 **Storico e disponibilità**: almeno 100 barre di riscaldamento, aumentate per periodi EMA/Hull elevati. Il backtest non ricostruisce gli universi storici: una lista di titoli odierni introduce survivorship bias. La posizione finale resta aperta e valorizzata al close.
@@ -254,4 +257,7 @@ with tabs[3]:
     quality=[]
     for s,df in data.items():quality.append({'Ticker':s,'Prima barra':str(df.index[0].date()),'Ultima chiusa':str(df.index[-1].date()),'Barre':len(df),'Chiusura':st.session_state.lab_notes.get(s,'')})
     st.dataframe(pd.DataFrame(quality),hide_index=True,width='stretch')
+    for symbol,df in data.items():
+        if df.attrs.get('ohlc_corrections'):
+            with st.expander('Barre originali corrette · '+symbol):st.dataframe(pd.DataFrame(df.attrs['ohlc_corrections']),width='stretch')
     st.download_button('Scarica lista di esempio',Path(__file__).with_name('lista_esempio.txt').read_bytes(),'lista_esempio.txt','text/plain')

@@ -14,7 +14,8 @@ def test_app_screener_backtest_comparison():
             if b.label=='Carica dati e aggiorna screener':b.click().run();break
         assert not at.exception
         assert len(at.session_state['lab_data'])==7
-        for label,state in [('Esegui backtest','lab_results'),('Esegui confronto','comparison')]:
+        for label,state,section in [('Esegui backtest','lab_results','Backtest'),('Esegui confronto','comparison','Confronto')]:
+            at.radio(key='section').set_value(section).run()
             for b in at.button:
                 if b.label==label:b.click().run();break
             assert not at.exception

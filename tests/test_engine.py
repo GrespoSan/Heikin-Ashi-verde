@@ -77,3 +77,11 @@ def test_futures_pnl_point_value():
 
 def test_no_modules_no_trades():
     assert backtest(synthetic(),Rules(modules=()))['trades'].empty
+
+def test_ohlc_repair_is_explicit_and_audited():
+    x=pd.DataFrame({'date':['2025-01-01'],'open':[10.],'high':[9.9],'low':[9.],'close':[9.5]})
+    with pytest.raises(ValueError):normalize_bars(x)
+    corrected=normalize_bars(x,repair=True)
+    assert corrected.high.iloc[0]==10.
+    assert corrected.open.iloc[0]==10.
+    assert corrected.attrs['ohlc_corrections'][0]['high']==9.9
