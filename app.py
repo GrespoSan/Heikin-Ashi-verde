@@ -11,11 +11,11 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
-from engine import Indicators,Rules,MODULES,calculate,evaluate,backtest,parse_symbols,config_id
+from engine import Indicators,Rules,MODULES,calculate,evaluate,backtest,parse_symbols,config_id,normalize_bars,invalid_ohlc,prepare_features,warmup_bars
 from data_sources import yahoo,alpaca,read_import,completed_bars
 st.set_page_config(page_title='G. Trend Lab',page_icon='🧪',layout='wide')
 st.title('G. Trend Lab')
-st.caption('v1.0 · Screener e laboratorio LONG · Heikin Ashi, Hull e Forces')
+st.caption('v1.1 · Screener e laboratorio LONG · Heikin Ashi, Hull e Forces')
 TODAY=pd.Timestamp.now(tz='Europe/Rome').date()
 HELP={
 'ha':'Ultima candela HA chiusa verde (close HA ≥ open HA). Non richiede una nuova inversione.',
@@ -62,7 +62,8 @@ with st.sidebar:
     timeframe=st.selectbox('Timeframe',['Daily','Weekly'])
     history_start=st.date_input('Inizio storico',value=date(2010,1,1),max_value=TODAY)
     adjustment=st.selectbox('Prezzi',['Solo split / non rettificare dividendi','Tutti gli aggiustamenti'],help='Yahoo auto_adjust=False: prezzi OHLC generalmente corretti per split. True: anche rettifica per dividendi. Il laboratorio non accredita dividendi separatamente: dichiarare sempre il tipo di serie.')
-    repair_ohlc=st.checkbox('Correggi High/Low incoerenti',False,help='Solo se abilitato: amplia High/Low per includere Open e Close, senza modificare questi ultimi. Le barre originali vengono registrate e incluse nell’esportazione. Le correzioni possono influenzare segnali, stop e target; di default la serie incoerente è rifiutata.')
+    repair_ohlc=st.checkbox('Correggi High/Low incoerenti',False,help='Solo se abilitato: amplia High/Low per includere Open e Close, senza modificare questi ultimi. Le barre originali vengono registrate e incluse nell’esportazione. Le correzioni possono influenzare segnali, stop e target; Se disattivato: screener solo sul tratto recente pulito; backtest bloccato se il periodo o il riscaldamento contengono anomalie.')
+    st.caption('Per partire: Solo split; correzione High/Low disattivata. Su TradingView usa la stessa scelta per i dividendi. Le anomalie vengono segnalate, non corrette automaticamente.')
     feed='sip' 
     if source=='Alpaca':
         feed=st.selectbox('Feed Alpaca',['sip','iex'],help='SIP consolidato; IEX singola borsa. Nessun fallback automatico. Le autorizzazioni dipendono dall’account.')
@@ -116,7 +117,7 @@ try:
     if len(symbols)>150:raise ValueError('Massimo 150 ticker per esecuzione; suddividere la lista.')
 except ValueError as e:st.error(str(e));st.stop()
 import_hash=hashlib.sha256(imported.getvalue()).hexdigest() if imported else ''
-data_signature=json.dumps([source,market,timeframe,str(history_start),adjustment,feed,symbols,import_hash,repair_ohlc])
+data_signature=json.dumps(['1.1',source,market,timeframe,str(history_start),adjustment,feed,symbols,import_hash,repair_ohlc])
 if st.session_state.get('data_signature')!=data_signature:
     st.session_state.pop('lab_data',None);st.session_state.pop('lab_results',None)
 st.session_state.data_signature=data_signature
@@ -131,8 +132,8 @@ if st.button('Carica dati e aggiorna screener',type='primary'):
                 raw=read_import(imported.getvalue(),imported.name,repair_ohlc)
             else:raw=fetch_cached(symbol,str(history_start),str(TODAY+timedelta(days=1)),source,adjustment,feed,key,secret,hashlib.sha256(key.encode()).hexdigest()[:12],repair_ohlc)
             raw=raw[raw.index>=pd.Timestamp(history_start)]
-            closed,note=completed_bars(raw,symbol,market,timeframe)
-            corrections=raw.attrs.get('ohlc_corrections',[])
+            closed,note=completed_bars(raw,symbol,market,timeframe,repair=repair_ohlc)
+            corrections=closed.attrs.get('ohlc_corrections',[])
             if corrections:note+=f' High/Low corretti su {len(corrections)} barre (scelta esplicita).';closed.attrs['ohlc_corrections']=corrections
             data[symbol]=closed;notes[symbol]=note
         except Exception as exc:
@@ -146,25 +147,36 @@ data=st.session_state.get('lab_data',{})
 if not data:
     st.info('Carica la lista.txt oppure usa i ticker proposti, poi premi «Carica dati e aggiorna screener».')
     st.stop()
-features={s:calculate(df,ind) for s,df in data.items()}
+features={};screen_quality={}
+for symbol,df in data.items():
+    try:
+        xx=prepare_features(df,ind)
+        if bool(xx.ready.iloc[-1]):features[symbol]=xx
+        else:screen_quality[symbol]=f'Servono {warmup_bars(ind)} barre pulite consecutive prima di pubblicare il segnale.'
+    except ValueError as exc:screen_quality[symbol]=str(exc)
+
 section=st.radio('Sezione',['Screener','Backtest','Confronto','Dati e metodo'],horizontal=True,key='section')
 if section=='Screener':
     rows=[]
     for s,x in features.items():
         row=x.iloc[-1];known=bool(row.ready);ok=[MODULES[k] for k in mods if known and bool(row[k])];missing=[MODULES[k]+(' · N/D' if not known else '') for k in mods if not known or not bool(row[k])]
         extras=[MODULES[k] for k in MODULES if k not in mods and known and bool(row[k]) and not(k=='forces_positive' and ('forces_strong' in mods or bool(row.forces_strong)))]
-        rows.append({'Ticker':s,'Data':str(x.index[-1].date()),'Esito':f'{len(ok)}/{len(mods)}' if mods else 'NESSUN FILTRO','Soddisfatte':' · '.join(ok) or '—','Mancanti':' · '.join(missing) or '—','Altre conferme · fuori filtro':' · '.join(extras) or '—','Forces':row.forces,'mancano':len(missing)})
+        rows.append({'Ticker':s,'Data':str(x.index[-1].date()),'Esito':f'{len(ok)}/{len(mods)}' if mods else 'NESSUN FILTRO','Soddisfatte':' · '.join(ok) or '—','Mancanti':' · '.join(missing) or '—','Altre conferme · fuori filtro':' · '.join(extras) or '—','Forces':row.forces,'Qualità dati':('Storico pulito dal '+str(x.index[0].date())) if x.attrs.get('quality_restart') else 'OK','mancano':len(missing)})
+    for symbol,reason in screen_quality.items():
+        rows.append({'Ticker':symbol,'Data':str(data[symbol].index[-1].date()),'Esito':'N/D','Soddisfatte':'—','Mancanti':'Dati non verificabili','Altre conferme · fuori filtro':'—','Forces':np.nan,'Qualità dati':reason,'mancano':99})
     table=pd.DataFrame(rows).sort_values(['mancano','Ticker'])
     view=st.selectbox('Righe',['Tutte','Solo complete','Complete + manca una'])
     if view=='Solo complete':table=table[(table.mancano==0)&bool(mods)]
     if view=='Complete + manca una':table=table[(table.mancano<=1)&bool(mods)]
     st.dataframe(table.drop(columns='mancano'),hide_index=True,width='stretch')
     st.download_button('Scarica screener CSV',csv_bytes(table.drop(columns='mancano')),'screener.csv','text/csv')
-    s=st.selectbox('Dettaglio strumento',list(features),key='screen_symbol');show_chart(features[s],key='screen')
-    st.caption(st.session_state.lab_notes.get(s,''))
+    if features:
+        s=st.selectbox('Dettaglio strumento',list(features),key='screen_symbol');show_chart(features[s],key='screen')
+        st.caption(st.session_state.lab_notes.get(s,''))
 if section=='Backtest':
-    s=st.selectbox('Strumento',list(features),key='bt_symbol');x=features[s]
-    earliest=x.index[min(len(x)-1,max(100,5*int(ema)+int(sma),int(hull)+int(np.sqrt(hull))+2,int(atr)))].date()
+    s=st.selectbox('Strumento',list(data),key='bt_symbol');raw_test=data[s]
+    x=features[s] if s in features else calculate(raw_test,ind)
+    earliest=x.index[min(len(x)-1,warmup_bars(ind))].date()
     c1,c2=st.columns(2)
     start=c1.date_input('Inizio test',value=earliest,key='bt_start')
     end=c2.date_input('Fine test',value=x.index[-1].date(),key='bt_end')
@@ -175,10 +187,13 @@ if section=='Backtest':
             if '=F' in s and instrument=='Futures (contratto singolo)':raise ValueError('Il ticker Yahoo =F è una serie continua: scegliere Studio del segnale oppure importare un contratto singolo.')
             if instrument=='Azioni / ETF / spot' and '=F' in s:raise ValueError('Per una serie =F scegliere «Serie continua: studio del segnale».')
             if instrument=='Futures (contratto singolo)' and adjustment=='Tutti gli aggiustamenti':raise ValueError('Per un singolo contratto usare prezzi non rettificati per dividendi.')
+            x=prepare_features(raw_test,ind,str(start),str(end))
+            st.session_state.lab_features=x
             st.session_state.lab_results=backtest(x,rules,str(start),str(end));st.session_state.bt_signature=signature
         except ValueError as exc:st.error(str(exc))
     result=st.session_state.get('lab_results')
     if result:
+        x=st.session_state.lab_features
         stats=result['stats'];cs=st.columns(4)
         for col,k in zip(cs,['Rendimento %','Max drawdown %','Trade chiusi','Win rate %']):col.metric(k,f'{stats[k]:.2f}' if k!='Trade chiusi' else stats[k])
         st.caption(f"Profit factor: {stats['Profit factor']:.2f} · Equity finale: {stats['Equity finale']:.2f} {currency} · Include valorizzazione delle posizioni aperte; nessuna liquidazione artificiale a fine test.")
@@ -193,7 +208,7 @@ if section=='Backtest':
                 trades=result['trades'];choice=st.selectbox('Operazione',range(len(trades)),format_func=lambda j:f"{trades.iloc[j]['Ingresso'].date()} → {trades.iloc[j]['Uscita'].date()}")
                 t=trades.iloc[choice];st.write({k:t[k] for k in ['Segnale','Ingresso','Uscita','Motivo','Stop','Target','PnL netto']})
                 st.dataframe(x.loc[t.Segnale:t.Uscita,['open','high','low','close','ha_open','ha_close','forces','hull']+list(MODULES)],width='stretch')
-        meta={'version':'1.0','config_id':config_id(ind,rules),'indicatori':asdict(ind),'regole':asdict(rules),'fonte':source,'feed':feed if source=='Alpaca' else None,'prezzi':adjustment,'ticker':s,'inizio':str(start),'fine':str(end),'nota_chiusura':st.session_state.lab_notes.get(s),'stats':stats,'correzioni_ohlc_originali':data[s].attrs.get('ohlc_corrections',[])}
+        meta={'version':'1.1','config_id':config_id(ind,rules),'indicatori':asdict(ind),'regole':asdict(rules),'fonte':source,'feed':feed if source=='Alpaca' else None,'prezzi':adjustment,'ticker':s,'inizio':str(start),'fine':str(end),'nota_chiusura':st.session_state.lab_notes.get(s),'inizio_storico_pulito':str(x.index[0].date()),'correzione_attiva':repair_ohlc,'stats':stats,'correzioni_ohlc_originali':data[s].attrs.get('ohlc_corrections',[])}
         z=io.BytesIO()
         with zipfile.ZipFile(z,'w',zipfile.ZIP_DEFLATED) as archive:
             archive.writestr('configurazione.json',json.dumps(meta,indent=2,default=str))
@@ -203,7 +218,7 @@ if section=='Backtest':
         st.download_button('Esporta test completo ZIP',z.getvalue(),f'test_{s}_{config_id(ind,rules)}.zip','application/zip')
 if section=='Confronto':
     st.write('Confronta la configurazione corrente su più ticker, oppure tutte le combinazioni di un piccolo insieme di moduli. Ogni titolo ha un capitale indipendente: non è un portafoglio.')
-    chosen=st.multiselect('Ticker da confrontare',list(features),default=list(features)[:min(10,len(features))])
+    chosen=st.multiselect('Ticker da confrontare',list(data),default=list(data)[:min(10,len(data))])
     compare_modes=st.radio('Configurazioni',['Solo corrente','Combinazioni dei moduli scelti'],horizontal=True)
     pool=st.multiselect('Moduli candidati',list(MODULES),default=['ha','forces_positive','hull_trend'],format_func=lambda k:MODULES[k],disabled=compare_modes=='Solo corrente')
     c1,c2=st.columns(2);cstart=c1.date_input('Inizio confronto',value=max(history_start,date(2015,1,1)),key='cmp_start');cend=c2.date_input('Fine confronto',value=TODAY,key='cmp_end')
@@ -224,17 +239,21 @@ if section=='Confronto':
             output=[];errors=[];p=st.progress(0);total=len(combos)*len(chosen)*len(ftypes);done=0
             for symbol in chosen:
                 for src in ftypes:
-                    cfg=replace(ind,forces_source=src);xx=calculate(data[symbol],cfg)
+                    cfg=replace(ind,forces_source=src)
                     for combo in combos:
                         rr=replace(rules,modules=tuple(combo));row={'Ticker':symbol,'Moduli':' + '.join(MODULES[k] for k in combo),'Forces':src,'ID':config_id(cfg,rr)}
                         try:
                             for label,begin,finish in [('Selezione',cstart,split-timedelta(days=1)),('Verifica',split,cend)]:
+                                xx=prepare_features(data[symbol],cfg,str(begin),str(finish))
                                 res=backtest(xx,rr,str(begin),str(finish))
                                 row.update({label+' · '+k:v for k,v in res['stats'].items() if k in ['Trade chiusi','Rendimento %','Max drawdown %','Profit factor']})
                             output.append(row)
                         except ValueError as exc:errors.append({'Ticker':symbol,'Errore':str(exc)})
                         done+=1;p.progress(done/total)
-            if not output:raise ValueError('Nessun test valido: controllare disponibilità dati e periodi.')
+            if not output:
+                st.session_state.compare_errors=errors
+                if errors:st.dataframe(pd.DataFrame(errors).drop_duplicates(),hide_index=True)
+                raise ValueError('Nessun test valido: controllare disponibilità dati e periodi.')
             df=pd.DataFrame(output);df['Campione sufficiente']=df['Selezione · Trade chiusi']>=mintr
             df=df.sort_values(['Campione sufficiente','Selezione · Rendimento %'],ascending=[False,False])
             st.session_state.comparison=df;st.session_state.compare_errors=errors;st.session_state.compare_signature=compare_signature
@@ -253,11 +272,17 @@ if section=='Dati e metodo':
 
 **Costi e rischio**: costi per lato; quote frazionarie nel modello spot; nel modello futures quantità fissa e valore punto esplicito. Niente margini, FX, rollover, interessi o imposte. Dividendi non accreditati separatamente. Il drawdown è al close e può sottostimare quello intraday.
 
-**Validazione**: confrontare prima gli indicatori con TradingView, poi scegliere sul periodo di selezione e controllare la verifica. Una combinazione migliore nello storico non è automaticamente robusta. Nessuna condizione Balance è presente.''')
+**Validazione**: confrontare prima gli indicatori con TradingView, poi scegliere sul periodo di selezione e controllare la verifica. Una combinazione migliore nello storico non è automaticamente robusta. Nessuna condizione Balance è presente.
+
+**Anomalie OHLC**: lo screener usa soltanto l’ultimo tratto pulito con riscaldamento sufficiente. Il backtest viene bloccato se il periodo contiene anomalie o lo storico pulito precedente non basta. La correzione High/Low è facoltativa ed esplicita. Le candele aperte sono escluse prima di controllare gli OHLC.''')
     quality=[]
-    for s,df in data.items():quality.append({'Ticker':s,'Prima barra':str(df.index[0].date()),'Ultima chiusa':str(df.index[-1].date()),'Barre':len(df),'Chiusura':st.session_state.lab_notes.get(s,'')})
+    for s,df in data.items():quality.append({'Ticker':s,'Prima barra':str(df.index[0].date()),'Ultima chiusa':str(df.index[-1].date()),'Barre':len(df),'Barre anomale non corrette':int(invalid_ohlc(df).sum()),'Ultima anomalia':str(df.index[invalid_ohlc(df)][-1].date()) if invalid_ohlc(df).any() else '—','Chiusura':st.session_state.lab_notes.get(s,'')})
     st.dataframe(pd.DataFrame(quality),hide_index=True,width='stretch')
     for symbol,df in data.items():
+        bad=invalid_ohlc(df)
+        if bad.any():
+            with st.expander('Barre anomale originali · '+symbol):st.dataframe(df.loc[bad],width='stretch')
         if df.attrs.get('ohlc_corrections'):
             with st.expander('Barre originali corrette · '+symbol):st.dataframe(pd.DataFrame(df.attrs['ohlc_corrections']),width='stretch')
     st.download_button('Scarica lista di esempio',Path(__file__).with_name('lista_esempio.txt').read_bytes(),'lista_esempio.txt','text/plain')
+

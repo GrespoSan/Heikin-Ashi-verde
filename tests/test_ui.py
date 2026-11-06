@@ -20,3 +20,4 @@ def test_app_screener_backtest_comparison():
                 if b.label==label:b.click().run();break
             assert not at.exception
             assert at.session_state[state] is not None
+

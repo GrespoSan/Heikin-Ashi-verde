@@ -58,7 +58,20 @@ Il plugin ChatGPT non fornisce automaticamente credenziali all'app.
 
 ## Controllo qualità OHLC
 
-Di default le serie con OHLC incoerenti sono rifiutate con date e conteggio.
+Impostazioni iniziali consigliate: Solo split / non rettificare dividendi, correzione
+High/Low disattivata. Se TradingView usa rettifica per dividendi, allineare anche quella
+scelta per un confronto equivalente: split-only non garantisce OHLC identici fra provider.
+
+Le barre aperte vengono escluse prima della validazione OHLC.
+Le vecchie anomalie non escludono l'intero ticker: lo screener riparte dal primo giorno
+successivo all'ultima anomalia e pubblica il segnale solo dopo il warm-up pulito necessario.
+La colonna Qualità dati dichiara il riavvio; con anomalia recente il risultato è N/D.
+
+Il backtest controlla il periodo richiesto e il riscaldamento precedente. Si blocca in
+presenza di barre incoerenti nel test o di warm-up pulito insufficiente. I dati successivi
+alla fine del test non influiscono sulla valutazione. La Weekly conserva la segnalazione
+di una Daily incoerente anche se l'aggregato settimanale appare valido.
+
 L'opzione esplicita Correggi High/Low incoerenti amplia il range ai prezzi Open/Close,
 senza modificare Open e Close. I valori originali sono visibili in Dati e metodo e
 nell'esportazione ZIP. Non è una ricostruzione dei veri estremi intraday; può cambiare
@@ -103,3 +116,4 @@ Riferimenti:
 - https://ranaroussi.github.io/yfinance/reference/api/yfinance.download.html
 - https://alpaca.markets/sdks/python/api_reference/data/stock/requests.html
 - https://docs.streamlit.io/develop/api-reference/app-testing
+

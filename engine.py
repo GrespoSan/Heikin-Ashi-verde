@@ -63,7 +63,7 @@ def parse_symbols(text, market='Italia', source='Yahoo'):
             if not re.fullmatch(r'[A-Z0-9.^=/_-]+',t): raise ValueError(f'Ticker non valido: {t}')
             if t not in out: out.append(t)
     return out
-def normalize_bars(df,repair=False):
+def normalize_bars(df,repair=False,validate=True):
     x=df.copy()
     x.columns=[str(c).lower().strip() for c in x.columns]
     x=x.rename(columns={'o':'open','h':'high','l':'low','c':'close','v':'volume','t':'timestamp'})
@@ -85,7 +85,7 @@ def normalize_bars(df,repair=False):
     if not np.isfinite(x[['open','high','low','close']].to_numpy()).all(): raise ValueError('OHLC non finiti.')
     if x.index.has_duplicates: raise ValueError('Date duplicate: caricare una sola serie Daily per simbolo.')
     bad=(x.high<x[['open','close','low']].max(axis=1)-1e-9)|(x.low>x[['open','close','high']].min(axis=1)+1e-9)
-    if bad.any():
+    if bad.any() and (validate or repair):
         if not repair:
             dates=', '.join(str(d.date()) for d in x.index[bad][:3])
             raise ValueError(f'{int(bad.sum())} barre OHLC incoerenti ({dates}). Scegli un periodo diverso o abilita la correzione esplicita High/Low.')
@@ -95,7 +95,46 @@ def normalize_bars(df,repair=False):
         x['low']=x[['low','open','close']].min(axis=1)
     return x.sort_index()
 def resample_weekly(df):
-    return df.resample('W-FRI').agg({'open':'first','high':'max','low':'min','close':'last','volume':'sum'}).dropna(subset=['open'])
+    agg={'open':'first','high':'max','low':'min','close':'last','volume':'sum'}
+    if 'ohlc_valid' in df:agg['ohlc_valid']='all'
+    result=df.resample('W-FRI').agg(agg).dropna(subset=['open'])
+    result.attrs=dict(df.attrs)
+    return result
+
+def invalid_ohlc(df):
+    bad=(df.high<df[['open','close','low']].max(axis=1)-1e-9)|(df.low>df[['open','close','high']].min(axis=1)+1e-9)
+    if 'ohlc_valid' in df:bad=bad|~df.ohlc_valid
+    return bad
+
+def warmup_bars(cfg):
+    return max(100,5*cfg.ema+cfg.sma,cfg.hull+int(math.sqrt(cfg.hull))+2,cfg.atr)
+
+def prepare_features(df,cfg,start=None,end=None):
+    # Lo screener riparte dall'ultimo tratto pulito. Il backtest non attraversa anomalie.
+    x=df.loc[:pd.Timestamp(end)].copy() if end is not None else df.copy()
+    if x.empty:raise ValueError('Nessuna barra nel periodo richiesto.')
+    bad=invalid_ohlc(x)
+    if start is not None:
+        a=pd.Timestamp(start)
+        relevant=bad & (x.index>=a)
+        if relevant.any():
+            dates=', '.join(str(v.date()) for v in x.index[relevant][:3])
+            raise ValueError(f'{int(relevant.sum())} barre OHLC incoerenti nel periodo del test ({dates}). Riduci il periodo o scegli esplicitamente la correzione e ricarica i dati.')
+        positions=np.flatnonzero(x.index>=a)
+        if not len(positions):raise ValueError('Nessuna barra nel periodo del test.')
+        first=int(positions[0])
+        previous=np.flatnonzero(bad.to_numpy() & (np.arange(len(x))<first))
+    else:previous=np.flatnonzero(bad.to_numpy())
+    cut=int(previous[-1])+1 if len(previous) else 0
+    segment=x.iloc[cut:].copy()
+    if segment.empty:raise ValueError('Ultima candela chiusa incoerente: nessun segnale verificabile. Attendi dati aggiornati o valuta la correzione esplicita.')
+    if start is not None and cut and int((segment.index<pd.Timestamp(start)).sum())<warmup_bars(cfg):
+        suggested=segment.index[min(warmup_bars(cfg),len(segment)-1)].date()
+        raise ValueError(f'Storico pulito insufficiente prima del test dopo l’ultima anomalia. Servono {warmup_bars(cfg)} barre di riscaldamento; prima data candidata: {suggested}.')
+    result=calculate(segment,cfg)
+    result.attrs['quality_restart']=str(segment.index[0].date()) if cut else None
+    return result
+
 def wma(s,n):
     weights=np.arange(1,n+1,dtype=float)
     return s.rolling(n).apply(lambda a: np.dot(a,weights)/weights.sum(),raw=True)
@@ -134,7 +173,7 @@ def calculate(df,cfg):
         atr[cfg.atr-1]=tr.iloc[:cfg.atr].mean()
         for i in range(cfg.atr,len(x)):atr[i]=atr[i-1]+(tr.iloc[i]-atr[i-1])/cfg.atr
     x['atr']=atr
-    x['ready']=np.arange(len(x))>=max(100,5*cfg.ema+cfg.sma,cfg.hull+int(math.sqrt(cfg.hull))+2,cfg.atr)
+    x['ready']=np.arange(len(x))>=warmup_bars(cfg)
     return x
 def evaluate(x,modules):
     if any(k not in MODULES for k in modules):raise ValueError('Modulo sconosciuto.')
@@ -208,3 +247,4 @@ def backtest(x,rules,start=None,end=None):
     if pos:
         opened={'Ingresso':pos['date'],'Prezzo':pos['entry'],'Quantità':pos['qty'],'Stop':pos['stop'],'Target':pos['target'],'PnL non realizzato':(x.close.iloc[ids[-1]]-pos['entry'])*pos['qty']*point,'Uscita al prossimo open':pending_exit}
     return {'stats':stats,'trades':t,'equity':eq,'open':opened,'signal':signal}
+

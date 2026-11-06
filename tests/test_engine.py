@@ -85,3 +85,46 @@ def test_ohlc_repair_is_explicit_and_audited():
     assert corrected.high.iloc[0]==10.
     assert corrected.open.iloc[0]==10.
     assert corrected.attrs['ohlc_corrections'][0]['high']==9.9
+
+
+def long_daily():
+    idx=pd.bdate_range('2024-01-01',periods=350)
+    return pd.DataFrame({'open':10.,'high':11.,'low':9.,'close':10.5,'volume':1.},index=idx)
+
+def test_old_bad_bar_does_not_block_current_screener():
+    from engine import prepare_features
+    df=long_daily();df.loc[df.index[5],'high']=9.8
+    x=prepare_features(df,Indicators())
+    assert x.ready.iloc[-1] and x.index[0]==df.index[6]
+    assert df.high.iloc[5]==9.8 # nessuna rettifica nascosta
+
+def test_backtest_rejects_bad_in_range_and_accepts_earlier_anomaly():
+    from engine import prepare_features
+    df=long_daily();df.loc[df.index[5],'high']=9.8
+    with pytest.raises(ValueError,match='nel periodo del test'):
+        prepare_features(df,Indicators(),str(df.index[0].date()))
+    good=prepare_features(df,Indicators(),str(df.index[150].date()))
+    assert good.ready.loc[df.index[150]]
+    with pytest.raises(ValueError,match='riscaldamento'):
+        prepare_features(df,Indicators(),str(df.index[20].date()))
+
+def test_future_anomaly_does_not_change_past_features():
+    from engine import prepare_features
+    df=long_daily();reference=prepare_features(df,Indicators(),str(df.index[120].date()),str(df.index[200].date()))
+    df.loc[df.index[250],'high']=9.8
+    actual=prepare_features(df,Indicators(),str(df.index[120].date()),str(df.index[200].date()))
+    pd.testing.assert_frame_equal(actual,reference)
+
+def test_incomplete_bad_daily_excluded_before_validation_or_repair():
+    df=long_daily().iloc[:5].copy();df.index=pd.bdate_range('2026-11-02',periods=5)
+    df.loc[df.index[-1],'high']=9.8
+    for repair in (False,True):
+        closed,_=completed_bars(df,'AMP.MI','Italia',now='2026-11-06T14:00Z',repair=repair)
+        assert closed.index[-1]==pd.Timestamp('2026-11-05')
+        assert not closed.attrs.get('ohlc_corrections')
+
+def test_weekly_keeps_bad_daily_quality_even_if_aggregate_looks_valid():
+    df=long_daily().iloc[:5].copy();df.index=pd.bdate_range('2026-10-26',periods=5)
+    df.loc[df.index[1],'high']=9.8
+    closed,_=completed_bars(df,'AMP.MI','Italia',timeframe='Weekly',now='2026-11-01T14:00Z')
+    assert len(closed)==1 and not closed.ohlc_valid.iloc[0]
