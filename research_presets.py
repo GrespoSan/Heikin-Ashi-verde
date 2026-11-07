@@ -166,7 +166,8 @@ def simulate_preset(df, features, code, start=None, end=None, exit_method="Force
         exited = False
         forces_zero = (np.isfinite(std_force_exit[prev]) and
                        std_force_exit[prev] <= 0)
-        fade_two = (prev>=2 and np.isfinite(std_force_exit[prev-2:prev+1]).all()
+        fade_two = (position and prev>=2 and prev-1>=entry_idx
+                    and np.isfinite(std_force_exit[prev-2:prev+1]).all()
                     and std_force_exit[prev] > 0
                     and std_force_exit[prev-2] > std_force_exit[prev-1] >
                         std_force_exit[prev])
