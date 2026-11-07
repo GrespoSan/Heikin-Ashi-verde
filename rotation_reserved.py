@@ -12,7 +12,7 @@ from research_presets import prepare_preset_features
 from portfolio_validation import _risk, FEE
 
 ROTATION_VERSION = "ROTATION-RESERVED-SLOTS-2026-11-07-v1"
-RANKING_METHODS = ("Ticker alfabetico (controllo neutrale)",
+RANKING_METHODS = ("Ticker alfabetico (baseline deterministica)",
                    "Momentum 63 sedute alla chiusura precedente")
 MAX_STALE_CALENDAR_DAYS = 10
 
@@ -71,7 +71,7 @@ def _spy_reference(spy, dates, initial):
     return reference,_risk(reference,initial)
 
 def rotate_reserved(data,start,end,capital=10000.,max_positions=1,
-                    ranking=RANKING_METHODS[0],spy=None):
+                    ranking=RANKING_METHODS[0],spy=None,_prepared=None):
     if max_positions not in (1,2,3):
         raise ValueError("Massimo posizioni ammesso: 1, 2 o 3")
     if ranking not in RANKING_METHODS:
@@ -81,7 +81,7 @@ def rotate_reserved(data,start,end,capital=10000.,max_positions=1,
     start,end=pd.Timestamp(start),pd.Timestamp(end)
     if start>=end:
         raise ValueError("Intervallo temporale non valido")
-    universe,excluded=_prepare(data)
+    universe,excluded=_prepare(data) if _prepared is None else _prepared
     if not universe:
         raise ValueError("Nessun ticker valido: controllare OHLC e warm-up")
     calendars=[info["bars"].index[(info["bars"].index>=start)&
@@ -201,8 +201,9 @@ def rotate_reserved(data,start,end,capital=10000.,max_positions=1,
 
 def compare_capacities(data,start,end,capital=10000.,rankings=RANKING_METHODS,spy=None):
     output={}
+    prepared=_prepare(data)
     for method in rankings:
         for capacity in (1,2,3):
-            output[(capacity,method)]=rotate_reserved(data,start,end,capital,capacity,method,spy)
+            output[(capacity,method)]=rotate_reserved(data,start,end,capital,capacity,method,spy,_prepared=prepared)
     summary=pd.DataFrame([r["metrics"] for r in output.values()])
     return summary,output
