@@ -55,7 +55,7 @@ def passive_metrics(prices, dates):
     initial = float(p["open"].iloc[0]) * (1 + FEE)
     if initial <= 0:
         raise ValueError("Benchmark: prezzi non validi")
-    curve = p["close"].to_numpy(dtype=float) / initial
+    curve = p["close"].to_numpy(dtype=float, copy=True) / initial
     curve[-1] *= (1 - FEE)
     return _metrics(curve, t, np.ones(len(t)))
 
