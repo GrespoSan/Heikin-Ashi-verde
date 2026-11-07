@@ -1,5 +1,22 @@
 # G. Trend Lab
 
+## Validazione Portafoglio una tantum (v1.7.0, 07/11/2026)
+
+**Modello implementato e da collaudare in Streamlit:** 1 solo versamento iniziale, ripartito in N quote uguali tra i simboli validi. Ogni quota conserva cash e posizioni del suo ticker; non può prendere capitale da altre quote. Modello coerente con il precedente studio «19 quote iniziali uguali», ma adesso con una curva giornaliera mark-to-market delle posizioni aperte e della liquidità. Non è riallocazione dinamica della cassa.
+
+- Ingresso congelato **B**: Forces HA 7/7 che attraversa da non positivo a positivo, HA verde, close standard > EMA200. Buy all'open della seduta successiva dello stesso ticker.
+- Uscita congelata Supertrend 10×2: vendita al successivo open se **regime ribassista**, anche se il cambio di regime è avvenuto prima. Lo storico non richiedeva un nuovo crossover.
+- Fee 0,15% per lato, in aggiunta al prezzo di esecuzione standard, sul nozionale; nessun ulteriore slippage o costo di gestione. Quantità frazionarie, senza leva, finanziamento o depositi successivi. Cash con rendimento zero.
+- Per ogni giorno di negoziazione: patrimonio netto, cassa, valore investito, percentuale di esposizione e numero di posizioni. La curva valorizza ogni strumento all'ultimo close disponibile quando il mercato è chiuso; non si eseguono ordini in giorni senza OHLC per quel ticker.
+- Benchmark SPY: capitale interamente investito al primo open della finestra, stessi 0,15% per lato; periodo comune, giorni mancanti senza interpolare prezzi. Se SPY non copre l'inizio, benchmark N/D (non viene nascosto il disallineamento).
+- Output: KPI portafoglio (CAGR, DD MTM, Calmar, turnover nozionale, costi), curva equity, esecuzioni reali simulate, posizioni finali, esclusioni, benchmark SPY se disponibile.
+- Titoli troppo giovani o invalidi per 220 barre vengono esclusi dal capitale e il denominatore N viene ricalcolato **prima della simulazione**. Simboli inclusi ma non ancora quotati nel periodo restano con la propria quota in cassa sino a quando la strategia ha segnali eleggibili; questa è una semplificazione ex post.
+- **Limiti metodologici:** esclusi delistati/IPO point-in-time, spread, slippage aggiuntivo, tassazione, cambi FX, liquidità, differenze di calendario e total-return dividend cash. Non è possibile dichiarare un edge investibile da questi risultati.
+- I test automatici sono in `tests/test_portfolio_validation.py`. Test e deployment devono ancora essere confermati con un'esecuzione verificata.
+
+**Investimento una tantum:** indica un solo versamento, NON un solo acquisto per sempre. La strategia richiede successivi ordini condizionati; mantenimento passivo senza negoziare è un benchmark Buy & Hold differente.
+
+
 ## Audit ingresso Forces — ablazioni isolate (07/11/2026)
 
 **Sorgente verificato:** `research_presets.py`, protocollo `AB-FIVE-EXITS-2026-11-07-v4`. I preset A e B differiscono soltanto per la sorgente del Forces **all'ingresso**: A Standard 7/7, B Heikin Ashi 7/7. Entrambi richiedono HA verde e close Standard sopra EMA200 e un attraversamento Forces da <=0 a >0. Fill alla barra successiva.
