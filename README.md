@@ -1,42 +1,42 @@
 # G. Trend Lab
 
-## Confronto delle uscite Forces / Supertrend (protocollo 07/11/2026)
+## Confronto essenziale — due ingressi e tre uscite (07/11/2026)
 
-Nuova sezione separata **Confronto uscite**; dopo il caricamento dei dati usare
-"Esegui confronto delle due uscite". Non modifica le impostazioni dello Screener,
-Backtest o Confronto preesistenti.
+Ramo sperimentale: non modifica la versione attualmente pubblicata su Streamlit.
+Nel menu **Confronto uscite**, caricare uno storico Daily di OHLC Standard e
+cliccare **Esegui confronto 2 ingressi × 3 uscite**.
 
-- **A**: Forces 7/7 su candele Standard in ingresso; Forces 10/4 Standard in uscita.
-- **B**: Forces 7/7 su Heikin Ashi in ingresso; Forces 10/4 Standard in uscita.
-- **C**: Forces 7/7 Standard in ingresso; Forces 10/4 Heikin Ashi in uscita.
+**Ingressi congelati**
+- **A**: Forces Standard SMA7/EMA7 passa da <=0 a >0; HA verde; Close Standard > EMA200.
+- **B**: Forces Heikin Ashi SMA7/EMA7 passa da <=0 a >0; HA verde; Close Standard > EMA200.
 
-Ingresso: la candela di segnale è HA verde, Forces ingresso passa da <=0 a >0,
-il close Standard è sopra EMA200 (Standard). Si compra all'open successivo.
-Per ciascuno degli ingressi A/B/C il confronto testa DUE uscite:
-1. **Forces 10/4**: Forces uscita <= 0 alla chiusura.
-2. **Supertrend 10×2**: ATR Wilder di 10, moltiplicatore 2, calcolato sugli OHLC Standard. Si esce quando il regime risulta ribassista alla chiusura.
-In entrambe le uscite la vendita avviene all'open successivo.
+**Uscite** (applicate indipendentemente a ciascun ingresso)
+1. **Forces 10/4 Standard <=0** al close, vendi all'open successivo.
+2. **Supertrend ATR Wilder 10, fattore 2** ribassista al close, vendi all'open successivo.
+3. **Forces HA 10/4 <=0 E candela HA rossa, O trailing 5%**: il trailing si attiva
+   se la massima CHIUSURA Standard durante il trade supera il prezzo d'ingresso
+   corretto per i costi e se (max_close - close_attuale) / prezzo_ingresso >= 5%.
+   Segnale al close e vendita all'open successivo, non è uno stop intraday.
 
-**Verifica essenziale**: prima di accettare il Supertrend, confrontare barra per barra il regime prodotto con `ta.supertrend(2, 10)` di Pine Script v6 sullo stesso storico Standard. Le stime storiche esplorative precedenti usavano una ricostruzione diversa, e non devono essere trasferite automaticamente nella nuova app.
+**Perché non compare il preset C?** L'ingresso del vecchio preset C era
+identico a quello di A: differiva solo la sorgente Forces dell'uscita.
+Il laboratorio deve confrontare ingressi distinti, non duplicati; l'uscita
+Forces HA rimane disponibile nella terza opzione.
 
-Costi fissi per confronto: 0,15% per lato (commissioni + slippage ipotizzati),
-una posizione alla volta per titolo, senza stop/target/trailing, nessun
-rientro sulla stessa apertura di uscita. Solo Daily e modello percentuale
-azionario; per futures occorrono valori punto, rollover e costi diversi.
-I risultati di operazioni chiuse e le posizioni aperte sono separati.
-I CSV conservano ID stabili dei preset. Per riproducibilità lo storico
-deve contenere almeno 220 barre complete prima di iniziare il test.
+Il valore storico **+57,7% mediano, 12/16 titoli positivi** riguardava B con
+l'uscita 3, non è ancora replicato/verificato con questo motore. **Non** è il
+risultato attuale di tutta la matrice.
 
-**Attenzione**: il modello è di ricerca e non costituisce un edge validato.
-Usare OHLC Standard non rettificati/aggiustati coerentemente al confronto,
-controllare dividendi e corporate action, confrontare barra-per-barra con
-TradingView e misurare i nuovi segnali senza ottimizzazioni retroattive.
-I valori storici calcolati nel dialogo con feed TradingView potrebbero
-non coincidere con Yahoo o altri feed.
+Modello: una posizione alla volta per titolo, ingresso/uscita all'open
+successivo, costo stimato 0,15% per lato, nessun rientro nello stesso open
+di uscita; posizioni aperte riportate separatamente. I risultati si riferiscono
+a prezzi azionari Daily e non simulano margini/rollover futures. Il backtest
+dell'app e le altre sezioni restano autonomi.
 
-
-Trasformazione dello screener Heikin Ashi in laboratorio LONG multi-ticker Daily/Weekly.
-Nessuna condizione Balance. Il progetto Balance-Screener rimane separato.
+**Prima di pubblicare:** eseguire test automatici, allineare barra per barra
+Supertrend con TradingView Pine `ta.supertrend(2,10)`, confrontare Forces/HA
+e trading signals, verificare feed/corporate actions, e non selezionare
+parametri usando il periodo successivamente dichiarato fuori campione.
 
 ## Ripristino
 
