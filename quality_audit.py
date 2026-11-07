@@ -64,6 +64,7 @@ def quality_overview(data, origin="", minimum_warmup=220):
         overview.append({
             "Ticker":ticker,"Stato":status,"Barre disponibili":len(df),
             "Anomalie":len(anomalies),
+            "Barre corrette esplicitamente (fonte)":len(df.attrs.get("ohlc_corrections",[])),
             "Prima anomalia":anomalies[0]["Data"] if anomalies else "",
             "Ultima anomalia":anomalies[-1]["Data"] if anomalies else "",
             "Barre dopo ultima anomalia":after_last,
