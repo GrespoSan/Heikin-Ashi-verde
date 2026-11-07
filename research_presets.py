@@ -75,10 +75,12 @@ def supertrend_10x2(df):
                   else upper[i-1])
         lower[i]=(basic_lower if basic_lower>lower[i-1] or close[i-1]<lower[i-1]
                   else lower[i-1])
+        # TradingView: confronta il close con la banda FINALE CORRENTE,
+        # non con quella precedente. Il ramo dipende dal precedente Supertrend.
         if bullish[i-1]==1.0:
-            bullish[i]=0.0 if close[i]<lower[i-1] else 1.0
+            bullish[i]=0.0 if close[i]<lower[i] else 1.0
         else:
-            bullish[i]=1.0 if close[i]>upper[i-1] else 0.0
+            bullish[i]=1.0 if close[i]>upper[i] else 0.0
     return bullish
 
 def prepare_preset_features(df):
