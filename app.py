@@ -345,7 +345,8 @@ if section=='Ablazione ingressi':
                         spy_for_ablation=None
                 rows_ab,excluded_ab=evaluate_ablation_universe(data,abl_start,abl_end,spy_for_ablation)
                 st.session_state.abl_result={'rows':rows_ab,'excluded':excluded_ab,'revision':revision,
-                    'dates':(str(abl_start),str(abl_end)),'version':ABLATION_VERSION}
+                    'dates':(str(abl_start),str(abl_end)),'version':ABLATION_VERSION,
+                    'spy_available':spy_for_ablation is not None}
         result_ab=st.session_state.get('abl_result')
         if result_ab:
             if (result_ab['revision']!=revision or result_ab['dates']!=(str(abl_start),str(abl_end))
@@ -378,7 +379,7 @@ if section=='Ablazione ingressi':
                     st.warning(f'{len(ex)} ticker esclusi o non riconciliati, senza risultati sostitutivi.')
                     st.dataframe(ex,hide_index=True,width='stretch')
                     st.download_button('Scarica esclusioni ablazioni CSV',csv_bytes(ex),'trend_lab_ablazioni_esclusi.csv','text/csv',key='abl_excluded')
-                if spy_for_ablation is None:
+                if not result_ab.get('spy_available', False):
                     st.info('SPY non disponibile nel dataset o nel feed: benchmark SPY N/D.')
 
 if section=='Screener':
