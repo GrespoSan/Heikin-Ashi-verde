@@ -1,5 +1,24 @@
 # G. Trend Lab
 
+## Rotazione capitale a quote riservate — 1 / 2 / 3 posizioni (v1.8.0, 07/11/2026)
+
+**Scopo**: simula un unico capitale disponibile, per esempio **10.000 USD**, con possibilità di mantenere fino a 1, 2 o 3 posizioni simultanee. Si tratta di un modello alternativo al portafoglio a 19/63 quote fisse: non sommare o confondere i relativi CAGR.
+
+- **Quote riservate**: per limite M∈{1,2,3}, si creano esattamente M slot di importo iniziale `capitale/M`. Una quota inutilizzata resta in cash. Quando una posizione viene venduta, lo stesso slot conserva ricavato e perdite/profitti e si libera per il successivo titolo. Gli slot non si scambiano liquidità.
+- **Ingresso B congelato**: Forces HA 7/7 attraversa zero da <=0 a >0 + HA verde + close standard > EMA200, su candle chiusa. Compra all'open successivo; non apre se non c'è uno slot libero. Segnale non eseguito per capienza NON è posticipato.
+- **Uscita congelata**: chiude il 100% al successivo open se Supertrend standard Wilder ATR10×2 è ribassista; come nello storico, verifica il regime e **non richiede un cambio bullish→bearish**. Slot venduto non può ricomprare nella stessa giornata.
+- **Graduatorie concorrenti fissate ex ante**:
+  1. Ordinamento alfabetico del ticker (baseline deterministica **non casuale, non ottimale**).
+  2. Momentum delle precedenti 63 sedute, misurato da `close[t-1]/close[t-64]-1`. Ordina decrescente, ticker a parità. Non usa barre successive al segnale.
+- Per ciascuna graduatoria esegue M=1,2,3: **6 simulazioni**. Export sintesi, equity giornaliera, esecuzioni, posizioni, esclusioni.
+- **Costi** 0,15% a lato; mark-to-market include il costo ipotetico di liquidazione del titolo in portafoglio, coerentemente con `simulate_preset`. Cash a rendimento 0, quote frazionarie, nessuna leva.
+- **Rischio** CAGR portafoglio, DD massimo mark-to-market, esposizione, Calmar, numero segnali scartati, turnover nozionale e confronto SPY a capitale interamente investito dalla prima data del periodo comune; se SPY non copre l'inizio, N/D.
+- **Dati**: solo storici Daily già caricati in app. Caricamento Alpaca/Yahoo come negli altri moduli; serie con anomalie OHLC o dati insufficienti vengono escluse esplicitamente. Se una posizione rimane senza prezzo aggiornato per oltre dieci giorni di calendario, la simulazione viene bloccata (non si può supporre un prezzo dopo un delisting).
+- **Cambio**: il modello esegue la contabilità in **USD nominali** per azioni USA. Un investimento reale di 10.000 EUR richiede conversione del capitale iniziale e finale con FX storico, commissioni di cambio e profilo EUR/USD; ciò non è ancora disponibile. Imposte, spread effettivi, dividendi, FX, market impact e settlement non simulati. Quote frazionarie potrebbero non essere acquistabili presso il broker.
+- **Validazione**: elenco Core/Satellite scelto oggi (non point-in-time) e dati 2016–2026 già esaminati; questo non costituisce un out-of-sample. Per operatività reale servono test indipendenti, regole del broker (liquidità da vendite / settlement), gestione del rischio per gap e confronto rischio-normalizzato.
+- Test di regressione in `tests/test_rotation_reserved.py`: 1 slot/1 simbolo deve replicare la curva del preset B congelato, 1–3 slot mai oltre capienza, cash e patrimonio riconciliati, nessun look-ahead da prezzi futuri, 6 test sullo stesso universo.
+
+
 ## Validazione Portafoglio una tantum (v1.7.0, 07/11/2026)
 
 **Modello implementato e da collaudare in Streamlit:** 1 solo versamento iniziale, ripartito in N quote uguali tra i simboli validi. Ogni quota conserva cash e posizioni del suo ticker; non può prendere capitale da altre quote. Modello coerente con il precedente studio «19 quote iniziali uguali», ma adesso con una curva giornaliera mark-to-market delle posizioni aperte e della liquidità. Non è riallocazione dinamica della cassa.
