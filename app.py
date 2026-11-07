@@ -15,10 +15,10 @@ from plotly.subplots import make_subplots
 import streamlit as st
 from engine import Indicators,Rules,MODULES,calculate,evaluate,backtest,parse_symbols,config_id,normalize_bars,invalid_ohlc,prepare_features,warmup_bars
 from data_sources import yahoo,alpaca,read_import,completed_bars
-from research_presets import PRESET_VERSION, PRESETS, PRESET_DESCRIPTIONS, prepare_preset_features, simulate_preset
+from research_presets import PRESET_VERSION, PRESETS, EXIT_METHODS, PRESET_DESCRIPTIONS, prepare_preset_features, simulate_preset
 st.set_page_config(page_title='G. Trend Lab',page_icon='🧪',layout='wide')
 st.title('G. Trend Lab')
-st.caption('v1.4 · Screener, backtest e confronto preset A/B/C · HA, Hull, Forces ed EMA')
+st.caption('v1.4 · Screener, backtest e laboratorio di uscita Forces/Supertrend · HA, Hull, Forces ed EMA')
 # I risultati sono effimeri e dipendono dallo schema del motore, non solo dai parametri.
 SESSION_SCHEMA = 'trend-lab-results-3'
 def compatible_result(value):
@@ -176,11 +176,11 @@ if 'feature_cache' not in st.session_state:st.session_state.feature_cache=Ordere
 revision=st.session_state.lab_data_revision
 def get_features(symbol,cfg,start=None,end=None):
     return cached_features(st.session_state.feature_cache,revision,symbol,cfg,data[symbol],start,end)
-section=st.radio('Sezione',['Screener','Backtest','Preset A/B/C','Confronto','Dati e metodo'],horizontal=True,key='section')
-if section=='Preset A/B/C':
-    st.subheader('Confronto A/B/C — parametri congelati')
-    st.caption(f'Protocollo {PRESET_VERSION} · Daily LONG · Forza 7/7 ingresso, 10/4 uscita · Close sopra EMA 200 · solo Standard OHLC · acquisto/vendita al prossimo open · 0,15% per lato.')
-    st.info('Questa sezione è indipendente dai filtri e parametri della sidebar. Usa i dati già caricati, ma NON usa le uscite o le impostazioni di backtest della sidebar. Nessuna Balance, Hull, HA rossa come uscita, trailing o doppia HA rossa.')
+section=st.radio('Sezione',['Screener','Backtest','Confronto uscite','Confronto','Dati e metodo'],horizontal=True,key='section')
+if section=='Confronto uscite':
+    st.subheader('Confronto uscite — Forces 10/4 vs Supertrend 10×2')
+    st.caption(f'Protocollo {PRESET_VERSION} · Daily LONG · Forces 7/7 in ingresso, Close sopra EMA 200 · Forces 10/4 o Supertrend ATR 10×2 in uscita · esecuzioni all’open successivo · costi 0,15% per lato.')
+    st.info('Sezione sperimentale indipendente dalla sidebar. La versione principale non cambia. Nessuna Balance, Hull, trailing o doppia HA rossa. Supertrend calcolato sui prezzi standard; da confrontare barra per barra con TradingView prima di attribuire validità operativa ai risultati.')
     if timeframe!='Daily':
         st.warning('I tre preset sono definiti esclusivamente per Daily. Imposta Daily nella sidebar.')
     elif instrument=='Futures (contratto singolo)':
@@ -195,7 +195,7 @@ if section=='Preset A/B/C':
             st.error('La data iniziale deve precedere la data finale.')
         else:
             st.caption('L’EMA 200 e Forces richiedono barre di riscaldamento precedenti alla data iniziale. Le posizioni ancora aperte sono riportate separatamente; i rendimenti sono composti delle sole operazioni chiuse.')
-            if st.button('Esegui confronto A/B/C',type='primary',key='abc_run'):
+            if st.button('Esegui confronto delle due uscite',type='primary',key='abc_run'):
                 rows_abc=[]
                 operations_abc=[]
                 errors_abc=[]
@@ -206,13 +206,15 @@ if section=='Preset A/B/C':
                             raise ValueError(f'{int(bad.sum())} barre OHLC incoerenti: non riparo automaticamente.')
                         f=prepare_preset_features(frame)
                         for preset in PRESETS:
-                            res=simulate_preset(frame,f,preset,period_from,period_to)
-                            rows_abc.append({k:v for k,v in res.items() if k not in ('Operazioni','Equity')}|{'Ticker':symbol})
-                            if not res['Operazioni'].empty:
-                                tx=res['Operazioni'].copy()
-                                tx.insert(0,'Ticker',symbol)
-                                tx.insert(1,'Preset',preset)
-                                operations_abc.append(tx)
+                            for exit_method in EXIT_METHODS:
+                                res=simulate_preset(frame,f,preset,period_from,period_to,exit_method=exit_method)
+                                rows_abc.append({k:v for k,v in res.items() if k not in ('Operazioni','Equity')}|{'Ticker':symbol})
+                                if not res['Operazioni'].empty:
+                                    tx=res['Operazioni'].copy()
+                                    tx.insert(0,'Ticker',symbol)
+                                    tx.insert(1,'Preset',preset)
+                                    tx.insert(2,'Uscita',exit_method)
+                                    operations_abc.append(tx)
                     except Exception as exc:
                         errors_abc.append({'Ticker':symbol,'Errore':str(exc)})
                 st.session_state.abc_results={'rows':rows_abc,'trades':pd.concat(operations_abc,ignore_index=True) if operations_abc else pd.DataFrame(),'errors':errors_abc,'periodo':(str(period_from),str(period_to)),'revision':revision}
@@ -223,11 +225,11 @@ if section=='Preset A/B/C':
                 else:
                     frame=pd.DataFrame(abc['rows'])
                     if not frame.empty:
-                        st.dataframe(frame[['Ticker','Preset','ID','Trade chiusi','Vincenti %','Durata media','Rendimento realizzato %','Rendimento con aperta %','Drawdown massimo %','Posizione aperta']],hide_index=True,width='stretch')
-                        st.download_button('Scarica confronto A/B/C CSV',csv_bytes(frame),'trend_lab_ABC_confronto.csv','text/csv')
+                        st.dataframe(frame[['Ticker','Preset','Uscita','ID','Trade chiusi','Vincenti %','Durata media','Rendimento realizzato %','Rendimento con aperta %','Drawdown massimo %','Posizione aperta']],hide_index=True,width='stretch')
+                        st.download_button('Scarica confronto uscite CSV',csv_bytes(frame),'trend_lab_confronto_uscite.csv','text/csv')
                         if not abc['trades'].empty:
-                            st.download_button('Scarica operazioni A/B/C CSV',csv_bytes(abc['trades']),'trend_lab_ABC_operazioni.csv','text/csv')
-                        st.caption('I risultati non sono edge validati: niente rettifica dividendi automatica nei preset, nessun benchmark corretto per esposizione e nessun test prospettico.')
+                            st.download_button('Scarica operazioni per uscita CSV',csv_bytes(abc['trades']),'trend_lab_operazioni_per_uscita.csv','text/csv')
+                        st.caption('Le posizioni aperte sono valorizzate separatamente. Per il Supertrend occorre una verifica con ta.supertrend di TradingView; risultati retrospettivi, NON un edge validato. I preset non accreditano dividendi come flussi separati.')
                     if abc['errors']:
                         st.dataframe(pd.DataFrame(abc['errors']),hide_index=True,width='stretch')
 if section=='Screener':
