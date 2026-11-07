@@ -1,9 +1,9 @@
 # G. Trend Lab
 
-## Preset di ricerca A/B/C (protocollo 07/11/2026)
+## Confronto delle uscite Forces / Supertrend (protocollo 07/11/2026)
 
-Nuova sezione separata **Preset A/B/C**; dopo il caricamento dei dati usare
-"Esegui confronto A/B/C". Non modifica le impostazioni dello Screener,
+Nuova sezione separata **Confronto uscite**; dopo il caricamento dei dati usare
+"Esegui confronto delle due uscite". Non modifica le impostazioni dello Screener,
 Backtest o Confronto preesistenti.
 
 - **A**: Forces 7/7 su candele Standard in ingresso; Forces 10/4 Standard in uscita.
@@ -12,7 +12,12 @@ Backtest o Confronto preesistenti.
 
 Ingresso: la candela di segnale è HA verde, Forces ingresso passa da <=0 a >0,
 il close Standard è sopra EMA200 (Standard). Si compra all'open successivo.
-Uscita: Forces uscita <= 0 alla chiusura; vendita all'open successivo.
+Per ciascuno degli ingressi A/B/C il confronto testa DUE uscite:
+1. **Forces 10/4**: Forces uscita <= 0 alla chiusura.
+2. **Supertrend 10×2**: ATR Wilder di 10, moltiplicatore 2, calcolato sugli OHLC Standard. Si esce quando il regime risulta ribassista alla chiusura.
+In entrambe le uscite la vendita avviene all'open successivo.
+
+**Verifica essenziale**: prima di accettare il Supertrend, confrontare barra per barra il regime prodotto con `ta.supertrend(2, 10)` di Pine Script v6 sullo stesso storico Standard. Le stime storiche esplorative precedenti usavano una ricostruzione diversa, e non devono essere trasferite automaticamente nella nuova app.
 
 Costi fissi per confronto: 0,15% per lato (commissioni + slippage ipotizzati),
 una posizione alla volta per titolo, senza stop/target/trailing, nessun
