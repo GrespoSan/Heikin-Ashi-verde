@@ -19,9 +19,10 @@ from research_presets import PRESET_VERSION, PRESETS, EXIT_METHODS, PRESET_DESCR
 from quality_audit import audit_ohlc_bars, quality_overview
 from validation_benchmarks import FINALISTS, strategy_metrics, passive_metrics, matched_benchmark
 from entry_ablation import ABLATION_VERSION, VARIANTS, evaluate_ablation_universe
+from portfolio_validation import PORTFOLIO_VERSION, portfolio_lump_sum
 st.set_page_config(page_title='G. Trend Lab',page_icon='🧪',layout='wide')
 st.title('G. Trend Lab')
-st.caption('v1.6.0 · Audit OHLC · confronto uscite · benchmark Buy & Hold e SPY')
+st.caption('v1.7.0 · Audit OHLC · ablazioni ingressi · validazione portafoglio')
 # I risultati sono effimeri e dipendono dallo schema del motore, non solo dai parametri.
 SESSION_SCHEMA = 'trend-lab-results-4'
 def compatible_result(value):
@@ -195,7 +196,7 @@ with st.expander("Qualità dati — titoli esclusi, date e prezzi OHLC anomali",
         st.download_button('Scarica dettaglio barre anomale CSV',csv_bytes(quality_bars),'trend_lab_barre_ohlc_anomale.csv','text/csv',key='quality_bars_export')
     else:
         st.success("Nessuna barra OHLC anomala rilevata negli storici caricati.")
-section=st.radio('Sezione',['Screener','Backtest','Confronto uscite','Ablazione ingressi','Confronto','Dati e metodo'],horizontal=True,key='section')
+section=st.radio('Sezione',['Screener','Backtest','Confronto uscite','Ablazione ingressi','Validazione Portafoglio','Confronto','Dati e metodo'],horizontal=True,key='section')
 if section=='Confronto uscite':
     st.caption('**Confronto congelato, indipendente dalla barra laterale:** ingresso A Forces Standard 7/7 · ingresso B Forces HA 7/7 · EMA200 · uscite Forces Standard/HA 10/4, Supertrend 10×2, HA + trailing 5%, E2, E5.')
     st.subheader('Confronto uscite — 2 ingressi × 5 uscite')
@@ -381,6 +382,61 @@ if section=='Ablazione ingressi':
                     st.download_button('Scarica esclusioni ablazioni CSV',csv_bytes(ex),'trend_lab_ablazioni_esclusi.csv','text/csv',key='abl_excluded')
                 if not result_ab.get('spy_available', False):
                     st.info('SPY non disponibile nel dataset o nel feed: benchmark SPY N/D.')
+
+if section=='Validazione Portafoglio':
+    st.subheader('Validazione Portafoglio — capitale iniziale una tantum')
+    st.caption(f'Protocollo {PORTFOLIO_VERSION} · B completo, Supertrend 10×2 congelato · prezzi standard · long only')
+    st.info('Modello a 1 versamento iniziale diviso in quote uguali per ticker: ogni quota conserva il proprio contante e reinveste solo sul medesimo titolo. Nessuna riallocazione fra titoli, nessun nuovo versamento, leva o interesse sulla cassa. Valorizzazione giornaliera delle posizioni aperte; acquisto/vendita all’open dopo segnale confermato.')
+    if timeframe!='Daily' or instrument=='Futures (contratto singolo)':
+        st.error('Richiesti Daily e modello Azioni / ETF / spot.')
+    else:
+        col1,col2=st.columns(2)
+        pf_start=col1.date_input('Inizio portafoglio',value=max(date(2016,10,19),min(x.index[0].date() for x in data.values())),key='pf_start')
+        pf_end=col2.date_input('Fine portafoglio',value=max(x.index[-1].date() for x in data.values()),key='pf_end')
+        pf_cap=st.number_input('Versamento iniziale unico (valuta di conto)',min_value=1000.,value=100000.,step=10000.,key='pf_cap')
+        st.warning('Non è un test point-in-time. Il modello usa soltanto titoli caricati e validi; i delistati assenti possono creare survivorship bias. Per confronti fra mercati/valute differenti servono FX e calendari allineati.')
+        if st.button('Esegui validazione portafoglio',type='primary',key='pf_go'):
+            try:
+                spy_input=data.get('SPY')
+                if spy_input is None and source!='CSV / JSON':
+                    try:
+                        key=secrets_value('ALPACA_API_KEY')
+                        sec=secrets_value('ALPACA_SECRET_KEY')
+                        raw=fetch_cached('SPY',str(history_start),str(TODAY+timedelta(days=1)),source,adjustment,feed,key,sec,hashlib.sha256(key.encode()).hexdigest()[:12],repair_ohlc)
+                        spy_input,_=completed_bars(raw,'SPY','USA','Daily',repair=repair_ohlc)
+                        if audit_ohlc_bars(spy_input,'SPY',origin_label):spy_input=None
+                    except Exception:spy_input=None
+                result_pf=portfolio_lump_sum(data,pf_start,pf_end,pf_cap,spy_input)
+                st.session_state.portfolio_validation={'result':result_pf,'revision':revision,'dates':(str(pf_start),str(pf_end)),
+                    'capital':pf_cap,'protocol':PORTFOLIO_VERSION}
+            except Exception as exc:
+                st.error(f'Validazione non eseguita: {str(exc)[:300]}')
+        stored=st.session_state.get('portfolio_validation')
+        if stored:
+            if stored['revision']!=revision or stored['dates']!=(str(pf_start),str(pf_end)) or stored['capital']!=pf_cap or stored['protocol']!=PORTFOLIO_VERSION:
+                st.warning('I risultati appartengono a dati, capitale o date precedenti: rieseguire.')
+            else:
+                p=stored['result']
+                m=p['metrics']
+                st.subheader('Capitale unico — patrimonio giornaliero mark-to-market')
+                st.dataframe(pd.DataFrame([m]),hide_index=True,width='stretch')
+                if p['spy_metrics'] is not None:
+                    st.caption('SPY: intero capitale investito al primo open disponibile della finestra, con medesimo costo per lato. Non è benchmark a date di ingresso abbinate.')
+                    st.dataframe(pd.DataFrame([p['spy_metrics']]),hide_index=True,width='stretch')
+                else:
+                    st.warning('Benchmark SPY N/D: prima seduta non coincidente o dati SPY mancanti. Nessuna interpolazione del rendimento.')
+                plot=p['curve'][['Data','Patrimonio']].rename(columns={'Patrimonio':'Strategia'}).set_index('Data')
+                if not p['spy_curve'].empty:
+                    plot=plot.join(p['spy_curve'][['Data','Patrimonio']].rename(columns={'Patrimonio':'SPY'}).set_index('Data'),how='left')
+                st.line_chart(plot)
+                st.download_button('Scarica equity giornaliera CSV',csv_bytes(p['curve']),'trend_lab_portafoglio_equity.csv','text/csv',key='pf_curve')
+                st.download_button('Scarica esecuzioni portafoglio CSV',csv_bytes(p['fills']),'trend_lab_portafoglio_esecuzioni.csv','text/csv',key='pf_fills')
+                st.download_button('Scarica posizioni finali CSV',csv_bytes(p['holdings']),'trend_lab_portafoglio_posizioni.csv','text/csv',key='pf_holdings')
+                if not p['excluded'].empty:
+                    st.warning(f"{len(p['excluded'])} simboli esclusi dall'universo operativo; quote iniziali ripartite solo fra gli ammessi.")
+                    st.dataframe(p['excluded'],hide_index=True,width='stretch')
+                    st.download_button('Scarica esclusioni CSV',csv_bytes(p['excluded']),'trend_lab_portafoglio_esclusi.csv','text/csv',key='pf_excluded')
+                st.caption('Turnover nozionale = somma degli importi eseguiti / capitale iniziale. I drawdown comprendono le oscillazioni delle posizioni ancora aperte. Per il rischio operativo reale vanno aggiunti spread, tasse, FX, liquidità, limiti di negoziazione e gestione di eventi societari.')
 
 if section=='Screener':
     features={};screen_quality={}
