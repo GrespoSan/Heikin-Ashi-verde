@@ -244,7 +244,7 @@ def simulate_preset(df, features, code, start=None, end=None, exit_method="Force
             marked = equity
         peak = max(peak,marked)
         worst_dd = min(worst_dd,marked/peak-1)
-        curve.append({"Data":df.index[i],"Equity":marked})
+        curve.append({"Data":df.index[i],"Equity":marked,"Exposure":remaining if position else 0.0})
     if last_i is None:
         raise ValueError("Nessuna barra utile nel periodo selezionato.")
     marked_last = (trade_capital*(sold_value+remaining*closes[last_i]*(1-.0015)/entry_price)
