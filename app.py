@@ -180,7 +180,7 @@ def get_features(symbol,cfg,start=None,end=None):
 origin_label=f"{source} | {market} | {timeframe} | {adjustment} | correzione H/L: {'ON' if repair_ohlc else 'OFF'}"
 quality_table,quality_bars=quality_overview(data,origin_label)
 with st.expander("Qualità dati — titoli esclusi, date e prezzi OHLC anomali",expanded=bool(not quality_bars.empty)):
-    st.caption("Diagnostica sui prezzi ORIGINALI caricati. Nessuna correzione automatica, nessuna sostituzione di dati.")
+    st.caption("Diagnostica dei prezzi caricati. Lascia «Correggi High/Low incoerenti» su OFF per vedere le anomalie originali; con ON le barre possono essere già state corrette esplicitamente a monte. Il confronto non modifica mai i prezzi.")
     st.dataframe(quality_table,hide_index=True,width='stretch')
     st.download_button('Scarica riepilogo qualità CSV',csv_bytes(quality_table),'trend_lab_qualita_titoli.csv','text/csv',key='quality_overview_export')
     if not quality_bars.empty:
