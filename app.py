@@ -16,9 +16,10 @@ import streamlit as st
 from engine import Indicators,Rules,MODULES,calculate,evaluate,backtest,parse_symbols,config_id,normalize_bars,invalid_ohlc,prepare_features,warmup_bars
 from data_sources import yahoo,alpaca,read_import,completed_bars
 from research_presets import PRESET_VERSION, PRESETS, EXIT_METHODS, PRESET_DESCRIPTIONS, prepare_preset_features, simulate_preset
+from quality_audit import audit_ohlc_bars, quality_overview
 st.set_page_config(page_title='G. Trend Lab',page_icon='🧪',layout='wide')
 st.title('G. Trend Lab')
-st.caption('v1.5 · Screener, backtest e 5 uscite comparate · HA, Forces, Supertrend e trailing')
+st.caption('v1.5.1 · Audit OHLC e confronto 2 ingressi × 5 uscite · esclusioni trasparenti')
 # I risultati sono effimeri e dipendono dallo schema del motore, non solo dai parametri.
 SESSION_SCHEMA = 'trend-lab-results-3'
 def compatible_result(value):
@@ -176,6 +177,18 @@ if 'feature_cache' not in st.session_state:st.session_state.feature_cache=Ordere
 revision=st.session_state.lab_data_revision
 def get_features(symbol,cfg,start=None,end=None):
     return cached_features(st.session_state.feature_cache,revision,symbol,cfg,data[symbol],start,end)
+origin_label=f"{source} | {market} | {timeframe} | {adjustment} | correzione H/L: {'ON' if repair_ohlc else 'OFF'}"
+quality_table,quality_bars=quality_overview(data,origin_label)
+with st.expander("Qualità dati — titoli esclusi, date e prezzi OHLC anomali",expanded=bool(not quality_bars.empty)):
+    st.caption("Diagnostica dei prezzi caricati. Lascia «Correggi High/Low incoerenti» su OFF per vedere le anomalie originali; con ON le barre possono essere già state corrette esplicitamente a monte. Il confronto non modifica mai i prezzi.")
+    st.dataframe(quality_table,hide_index=True,width='stretch')
+    st.download_button('Scarica riepilogo qualità CSV',csv_bytes(quality_table),'trend_lab_qualita_titoli.csv','text/csv',key='quality_overview_export')
+    if not quality_bars.empty:
+        st.warning(f"{quality_bars['Ticker'].nunique()} titoli hanno almeno una barra anomala. Non sono inclusi nel confronto completo.")
+        st.dataframe(quality_bars,hide_index=True,width='stretch')
+        st.download_button('Scarica dettaglio barre anomale CSV',csv_bytes(quality_bars),'trend_lab_barre_ohlc_anomale.csv','text/csv',key='quality_bars_export')
+    else:
+        st.success("Nessuna barra OHLC anomala rilevata negli storici caricati.")
 section=st.radio('Sezione',['Screener','Backtest','Confronto uscite','Confronto','Dati e metodo'],horizontal=True,key='section')
 if section=='Confronto uscite':
     st.subheader('Confronto uscite — 2 ingressi × 5 uscite')
@@ -202,14 +215,17 @@ if section=='Confronto uscite':
                 errors_abc=[]
                 for symbol,frame in data.items():
                     try:
-                        bad=invalid_ohlc(frame)
-                        if bool(bad.any()):
-                            raise ValueError(f'{int(bad.sum())} barre OHLC incoerenti: non riparo automaticamente.')
+                        anomalies=audit_ohlc_bars(frame,symbol,origin_label)
+                        if anomalies:
+                            first=", ".join(row["Data"] for row in anomalies[:3])
+                            raise ValueError(f"{len(anomalies)} barre OHLC anomale: {first}. Vedi audit e scarica CSV.")
+                        if len(frame)<220:
+                            raise ValueError(f"Solo {len(frame)} barre: ne servono almeno 220 per il confronto.")
                         f=prepare_preset_features(frame)
                         for preset in PRESETS:
                             for exit_method in EXIT_METHODS:
                                 res=simulate_preset(frame,f,preset,period_from,period_to,exit_method=exit_method)
-                                rows_abc.append({k:v for k,v in res.items() if k not in ('Operazioni','Esecuzioni','Equity')}|{'Ticker':symbol})
+                                rows_abc.append({k:v for k,v in res.items() if k not in ('Operazioni','Esecuzioni','Equity')}|{'Ticker':symbol,'Prima seduta dati':str(frame.index[0].date()),'Ultima seduta dati':str(frame.index[-1].date()),'Impronta OHLC':quality_table.loc[quality_table.Ticker==symbol,'Impronta OHLC'].iloc[0],'Origine dati':origin_label})
                                 if not res['Operazioni'].empty:
                                     tx=res['Operazioni'].copy()
                                     tx.insert(0,'Ticker',symbol)
@@ -238,7 +254,10 @@ if section=='Confronto uscite':
                             st.download_button('Scarica tutte le esecuzioni, incluse le vendite 50%',csv_bytes(abc['fills']),'trend_lab_esecuzioni_parziali.csv','text/csv')
                         st.caption('E5 non è un’uscita completa al primo segnale: metà resta investita. Risultati storici esplorativi; il precedente +57,7% B3 non è confermato automaticamente. Posizioni aperte e dividendi richiedono verifica.')
                     if abc['errors']:
-                        st.dataframe(pd.DataFrame(abc['errors']),hide_index=True,width='stretch')
+                        st.warning(f"{len(abc['errors'])} titoli esclusi dal confronto; i relativi risultati NON sono considerati.")
+                        err_df=pd.DataFrame(abc['errors'])
+                        st.dataframe(err_df,hide_index=True,width='stretch')
+                        st.download_button('Scarica titoli esclusi CSV',csv_bytes(err_df),'trend_lab_titoli_esclusi.csv','text/csv',key='comparison_exclusions')
 if section=='Screener':
     features={};screen_quality={}
     for symbol,df in data.items():
