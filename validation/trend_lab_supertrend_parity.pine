@@ -1,0 +1,39 @@
+//@version=6
+indicator("G. Trend Lab — Audit Supertrend 10×2", shorttitle="GTL ST parity", overlay=true, max_labels_count=100)
+// Confrontare sul grafico Daily di CANDELE STANDARD, stesso feed e stesso storico.
+// Il modello Python usa ATR Wilder 10 e fattore 2. TV: direzione <0 = rialzista.
+// Questo script confronta il built-in con la ricorrenza pubblica, senza ordini.
+[stBuiltIn, dirBuiltIn] = ta.supertrend(2.0, 10)
+float atr = ta.atr(10)
+float basicU = hl2 + 2.0*atr
+float basicL = hl2 - 2.0*atr
+var float upper = na
+var float lower = na
+var float manualLine = na
+var int manualDir = 1
+float prevU = nz(upper[1], basicU)
+float prevL = nz(lower[1], basicL)
+upper := basicU < prevU or close[1] > prevU ? basicU : prevU
+lower := basicL > prevL or close[1] < prevL ? basicL : prevL
+if na(atr[1])
+    manualDir := 1
+else if manualLine[1] == prevU
+    manualDir := close > upper ? -1 : 1
+else
+    manualDir := close < lower ? 1 : -1
+manualLine := manualDir == -1 ? lower : upper
+bool ready = not na(atr) and not na(dirBuiltIn)
+bool mismatch = ready and ((manualDir != dirBuiltIn) or math.abs(manualLine - stBuiltIn) > syminfo.mintick * 0.01)
+plot(dirBuiltIn < 0 ? stBuiltIn : na, "ST TradingView rialzista", color=color.green, linewidth=2, style=plot.style_linebr)
+plot(dirBuiltIn > 0 ? stBuiltIn : na, "ST TradingView ribassista", color=color.red, linewidth=2, style=plot.style_linebr)
+plot(mismatch ? manualLine : na, "Differenza ricorrenza", color=color.fuchsia, linewidth=3, style=plot.style_circles)
+plotshape(mismatch, "Disallineamento", shape.xcross, location.abovebar, color=color.fuchsia, size=size.tiny)
+var table status = table.new(position.top_right,2,2,border_width=1)
+var int mismatchCount = 0
+if barstate.isconfirmed and mismatch
+    mismatchCount += 1
+if barstate.islast
+    table.cell(status,0,0,"Mismatch ST",text_color=color.white,bgcolor=color.gray)
+    table.cell(status,1,0,str.tostring(mismatchCount),text_color=color.white,bgcolor=mismatchCount>0?color.red:color.green)
+    table.cell(status,0,1,"TV",text_color=color.white,bgcolor=color.gray)
+    table.cell(status,1,1,ready?(dirBuiltIn<0?"UP":"DOWN"):"N/D",text_color=color.white,bgcolor=color.gray)
