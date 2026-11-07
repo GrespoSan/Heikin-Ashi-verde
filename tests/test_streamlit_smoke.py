@@ -27,6 +27,8 @@ class StreamlitSmokeTest(unittest.TestCase):
         self.assertEqual(len(at.exception),0)
         at.session_state["lab_data"]={"TEST.MI":sample()}
         at.session_state["lab_data_revision"]="fixture-1"
+        at.session_state["lab_notes"]={"TEST.MI":"synthetic data"}
+        at.session_state["lab_errors"]=[]
         at.run()
         self.assertEqual(len(at.exception),0)
         at.radio(key="section").set_value("Confronto uscite").run()
