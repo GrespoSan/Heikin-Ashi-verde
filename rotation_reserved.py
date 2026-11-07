@@ -1,7 +1,7 @@
 """Rotazione LONG con massimo 1/2/3 posizioni e quote riservate.
 
 B + Supertrend 10x2 congelati. Segnali soltanto a barra chiusa (t-1),
-esecuzioni alla successiva apertura del rispettivo titolo (t).
+esecuzioni alla successiva apertura del rispettivo titolo (t).\nValore azioni al close con costo ipotetico di liquidazione per coerenza\ncon la curva del preset congelato.
 Ogni slot riceve capitale iniziale / max_posizioni; il ricavato resta
 nello slot per l'ingresso successivo. No cassa condivisa, leva o FX.
 """
@@ -171,7 +171,7 @@ def rotate_reserved(data,start,end,capital=10000.,max_positions=1,
                           "Slot":slot["id"],"Ticker":symbol,"Lato":"BUY",
                           "Prezzo open":px,"Quantita":qty,"Nozionale":notional,"Costo":fee})
         missed_count+=max(0,len(candidates)-len(available))
-        invested=sum(s["shares"]*(s["last_close"] or 0.) for s in slots)
+        invested=sum(s["shares"]*(s["last_close"] or 0.)*(1-FEE) for s in slots)
         cash=sum(s["cash"] for s in slots)
         value=invested+cash
         if value<=0: raise ValueError("Patrimonio non positivo")
@@ -193,7 +193,7 @@ def rotate_reserved(data,start,end,capital=10000.,max_positions=1,
                     "Modello":ROTATION_VERSION})
     holdings=pd.DataFrame([{"Slot":s["id"],"Ticker":s["symbol"] or "LIQUIDO",
                             "Contante":s["cash"],"Quantita":s["shares"],
-                            "Valore":s["cash"]+s["shares"]*(s["last_close"] or 0.)}
+                            "Valore":s["cash"]+s["shares"]*(s["last_close"] or 0.)*(1-FEE)}
                            for s in slots])
     spy_curve,spy_metrics=_spy_reference(spy,days,float(capital))
     return {"metrics":summary,"curve":curve,"fills":trades,"holdings":holdings,
