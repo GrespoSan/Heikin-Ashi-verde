@@ -15,9 +15,10 @@ from plotly.subplots import make_subplots
 import streamlit as st
 from engine import Indicators,Rules,MODULES,calculate,evaluate,backtest,parse_symbols,config_id,normalize_bars,invalid_ohlc,prepare_features,warmup_bars
 from data_sources import yahoo,alpaca,read_import,completed_bars
+from research_presets import PRESET_VERSION, PRESETS, EXIT_METHODS, PRESET_DESCRIPTIONS, prepare_preset_features, simulate_preset
 st.set_page_config(page_title='G. Trend Lab',page_icon='🧪',layout='wide')
 st.title('G. Trend Lab')
-st.caption('v1.3 · Screener e laboratorio LONG · HA, Hull, Forces ed EMA')
+st.caption('v1.5 · Screener, backtest e 5 uscite comparate · HA, Forces, Supertrend e trailing')
 # I risultati sono effimeri e dipendono dallo schema del motore, non solo dai parametri.
 SESSION_SCHEMA = 'trend-lab-results-3'
 def compatible_result(value):
@@ -175,7 +176,69 @@ if 'feature_cache' not in st.session_state:st.session_state.feature_cache=Ordere
 revision=st.session_state.lab_data_revision
 def get_features(symbol,cfg,start=None,end=None):
     return cached_features(st.session_state.feature_cache,revision,symbol,cfg,data[symbol],start,end)
-section=st.radio('Sezione',['Screener','Backtest','Confronto','Dati e metodo'],horizontal=True,key='section')
+section=st.radio('Sezione',['Screener','Backtest','Confronto uscite','Confronto','Dati e metodo'],horizontal=True,key='section')
+if section=='Confronto uscite':
+    st.subheader('Confronto uscite — 2 ingressi × 5 uscite')
+    st.caption(f'Protocollo {PRESET_VERSION} · Daily LONG · ingresso A Standard 7/7 oppure B Heikin Ashi 7/7 · HA verde + Close sopra EMA 200 · 5 uscite · open successivo · costi 0,15% per lato.')
+    st.info('10 combinazioni congelate, non un ottimizzatore. E2: uscita totale dopo due diminuzioni consecutive di Forces Standard 10/4 positivo, oppure allo zero. E5: 50% alla stessa attenuazione, restante 50% allo zero; se arriva allo zero prima, uscita integrale. Le vendite parziali hanno costi proporzionali. Supertrend da confrontare con TradingView.')
+    if timeframe!='Daily':
+        st.warning('Confronto disponibile solo su timeframe Daily.')
+    elif instrument=='Futures (contratto singolo)':
+        st.warning('Per adesso i preset simulano rendimenti percentuali azionari, non PnL futures: usa Azioni / ETF / spot.')
+    else:
+        first_date=min(frame.index[0].date() for frame in data.values())
+        last_date=max(frame.index[-1].date() for frame in data.values())
+        a,b=st.columns(2)
+        period_from=a.date_input('Inizio test uscite',value=max(first_date,date(2010,1,1)),min_value=first_date,max_value=last_date,key='abc_start')
+        period_to=b.date_input('Fine test uscite',value=last_date,min_value=first_date,max_value=last_date,key='abc_end')
+        if period_from>period_to:
+            st.error('La data iniziale deve precedere la data finale.')
+        else:
+            st.caption('L’EMA 200 e Forces richiedono barre di riscaldamento precedenti alla data iniziale. Le posizioni ancora aperte sono riportate separatamente; i rendimenti sono composti delle sole operazioni chiuse.')
+            if st.button('Esegui confronto 2 ingressi × 5 uscite',type='primary',key='abc_run'):
+                rows_abc=[]
+                operations_abc=[]
+                executions_abc=[]
+                errors_abc=[]
+                for symbol,frame in data.items():
+                    try:
+                        bad=invalid_ohlc(frame)
+                        if bool(bad.any()):
+                            raise ValueError(f'{int(bad.sum())} barre OHLC incoerenti: non riparo automaticamente.')
+                        f=prepare_preset_features(frame)
+                        for preset in PRESETS:
+                            for exit_method in EXIT_METHODS:
+                                res=simulate_preset(frame,f,preset,period_from,period_to,exit_method=exit_method)
+                                rows_abc.append({k:v for k,v in res.items() if k not in ('Operazioni','Esecuzioni','Equity')}|{'Ticker':symbol})
+                                if not res['Operazioni'].empty:
+                                    tx=res['Operazioni'].copy()
+                                    tx.insert(0,'Ticker',symbol)
+                                    tx.insert(1,'Preset',preset)
+                                    tx.insert(2,'Metodo uscita',exit_method)
+                                    operations_abc.append(tx)
+                                if not res['Esecuzioni'].empty:
+                                    fills=res['Esecuzioni'].copy()
+                                    fills.insert(0,'Ticker',symbol)
+                                    executions_abc.append(fills)
+                    except Exception as exc:
+                        errors_abc.append({'Ticker':symbol,'Errore':str(exc)})
+                st.session_state.abc_results={'rows':rows_abc,'trades':pd.concat(operations_abc,ignore_index=True) if operations_abc else pd.DataFrame(),'fills':pd.concat(executions_abc,ignore_index=True) if executions_abc else pd.DataFrame(),'errors':errors_abc,'periodo':(str(period_from),str(period_to)),'revision':revision,'protocol':PRESET_VERSION}
+            abc=st.session_state.get('abc_results')
+            if abc:
+                if abc['revision']!=revision or abc['periodo']!=(str(period_from),str(period_to)) or abc.get('protocol')!=PRESET_VERSION:
+                    st.warning('Risultati riferiti ad altri dati o date: ripeti il confronto.')
+                else:
+                    frame=pd.DataFrame(abc['rows'])
+                    if not frame.empty:
+                        st.dataframe(frame[['Ticker','Preset','Uscita','ID','Trade chiusi','Vincenti %','Durata media','Rendimento realizzato %','Rendimento con aperta %','Drawdown massimo %','Posizione aperta','Posizione residua %']],hide_index=True,width='stretch')
+                        st.download_button('Scarica confronto uscite CSV',csv_bytes(frame),'trend_lab_confronto_uscite.csv','text/csv')
+                        if not abc['trades'].empty:
+                            st.download_button('Scarica operazioni per uscita CSV',csv_bytes(abc['trades']),'trend_lab_operazioni_per_uscita.csv','text/csv')
+                        if not abc['fills'].empty:
+                            st.download_button('Scarica tutte le esecuzioni, incluse le vendite 50%',csv_bytes(abc['fills']),'trend_lab_esecuzioni_parziali.csv','text/csv')
+                        st.caption('E5 non è un’uscita completa al primo segnale: metà resta investita. Risultati storici esplorativi; il precedente +57,7% B3 non è confermato automaticamente. Posizioni aperte e dividendi richiedono verifica.')
+                    if abc['errors']:
+                        st.dataframe(pd.DataFrame(abc['errors']),hide_index=True,width='stretch')
 if section=='Screener':
     features={};screen_quality={}
     for symbol,df in data.items():

@@ -1,7 +1,35 @@
 # G. Trend Lab
 
-Trasformazione dello screener Heikin Ashi in laboratorio LONG multi-ticker Daily/Weekly.
-Nessuna condizione Balance. Il progetto Balance-Screener rimane separato.
+## Laboratorio LONG — 2 ingressi × 5 uscite (07/11/2026)
+
+La scheda **Confronto uscite** confronta **10 configurazioni congelate** su
+dati OHLC Standard Daily. Per eseguire: caricare i dati e selezionare
+**Esegui confronto 2 ingressi × 5 uscite**. Il resto dello screener e del
+backtest configurabile è indipendente.
+
+**Ingressi:**
+- A: HA verde, Forces su prezzi Standard 7/7 che attraversa zero verso l'alto, Close Standard > EMA200.
+- B: HA verde, Forces su prezzi Heikin Ashi 7/7 che attraversa zero verso l'alto, Close Standard > EMA200.
+
+**Uscite:**
+1. Forces Standard 10/4 diventa non positivo; ordine all'open successivo.
+2. Supertrend Wilder ATR10 moltiplicatore 2 diventa ribassista; ordine all'open successivo.
+3. Forces HA 10/4 non positivo **e** HA rossa, **oppure** trailing 5% dalla massima chiusura, calcolato rispetto al prezzo d'ingresso; ordine all'open successivo. Il trailing **non** è uno stop intraday.
+4. E2: Forces Standard 10/4 ancora positivo, ma in diminuzione per due chiusure consecutive **dopo l'ingresso**; vendita completa al prossimo open. Se Forces diventa non positivo prima, vendita completa di sicurezza.
+5. E5: stessa attenuazione E2, vendita del **50%** al prossimo open; restante 50% venduto quando Forces Standard 10/4 diventa non positivo. Se prima del parziale Forces arriva a zero, si vende direttamente il 100%. La liquidità del parziale resta ferma, senza reinvestimento.
+
+Tutte le vendite usano un costo ipotizzato dello 0,15% per lato e prezzo
+effettivo all'open successivo; E5 registra ciascuna esecuzione e calcola i
+costi proporzionalmente alla quantità venduta. Una sola posizione long per
+titolo. I trade chiusi e le posizioni ancora aperte sono distinguibili,
+con CSV dettagliato di **tutte le esecuzioni**.
+
+**Limitazioni:** il +57,7% mediano storico su B con uscita 3 è una stima
+esplorativa, non un risultato certificato della presente versione.
+Verificare equivalenza Supertrend rispetto a TradingView, fonti dati,
+dividendi e corporate actions; non confondere backtest in-sample con edge
+fuori campione. Il motore di confronto è azionario e non replica il PnL
+dei futures o il relativo rollover.
 
 ## Ripristino
 
