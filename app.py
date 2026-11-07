@@ -178,24 +178,24 @@ def get_features(symbol,cfg,start=None,end=None):
     return cached_features(st.session_state.feature_cache,revision,symbol,cfg,data[symbol],start,end)
 section=st.radio('Sezione',['Screener','Backtest','Confronto uscite','Confronto','Dati e metodo'],horizontal=True,key='section')
 if section=='Confronto uscite':
-    st.subheader('Confronto uscite — Forces 10/4 vs Supertrend 10×2')
-    st.caption(f'Protocollo {PRESET_VERSION} · Daily LONG · Forces 7/7 in ingresso, Close sopra EMA 200 · Forces 10/4 o Supertrend ATR 10×2 in uscita · esecuzioni all’open successivo · costi 0,15% per lato.')
-    st.info('Sezione sperimentale indipendente dalla sidebar. La versione principale non cambia. Nessuna Balance, Hull, trailing o doppia HA rossa. Supertrend calcolato sui prezzi standard; da confrontare barra per barra con TradingView prima di attribuire validità operativa ai risultati.')
+    st.subheader('Confronto essenziale — due ingressi e tre uscite')
+    st.caption(f'Protocollo {PRESET_VERSION} · Daily LONG · ingresso A Standard 7/7 oppure B Heikin Ashi 7/7 · HA verde + Close sopra EMA 200 · 3 uscite · open successivo · costi 0,15% per lato.')
+    st.info('Confronto sperimentale limitato a 2 ingressi × 3 uscite. Il preset C è stato tolto perché duplica l’ingresso A: la sorgente HA dell’uscita resta nella terza alternativa. Nessuna Balance o doppia HA rossa. Supertrend da verificare con TradingView.')
     if timeframe!='Daily':
-        st.warning('I tre preset sono definiti esclusivamente per Daily. Imposta Daily nella sidebar.')
+        st.warning('I due ingressi e le tre uscite sono definiti esclusivamente per Daily. Imposta Daily nella sidebar.')
     elif instrument=='Futures (contratto singolo)':
         st.warning('Per adesso i preset simulano rendimenti percentuali azionari, non PnL futures: usa Azioni / ETF / spot.')
     else:
         first_date=min(frame.index[0].date() for frame in data.values())
         last_date=max(frame.index[-1].date() for frame in data.values())
         a,b=st.columns(2)
-        period_from=a.date_input('Inizio test A/B/C',value=max(first_date,date(2010,1,1)),min_value=first_date,max_value=last_date,key='abc_start')
-        period_to=b.date_input('Fine test A/B/C',value=last_date,min_value=first_date,max_value=last_date,key='abc_end')
+        period_from=a.date_input('Inizio test uscite',value=max(first_date,date(2010,1,1)),min_value=first_date,max_value=last_date,key='abc_start')
+        period_to=b.date_input('Fine test uscite',value=last_date,min_value=first_date,max_value=last_date,key='abc_end')
         if period_from>period_to:
             st.error('La data iniziale deve precedere la data finale.')
         else:
             st.caption('L’EMA 200 e Forces richiedono barre di riscaldamento precedenti alla data iniziale. Le posizioni ancora aperte sono riportate separatamente; i rendimenti sono composti delle sole operazioni chiuse.')
-            if st.button('Esegui confronto delle due uscite',type='primary',key='abc_run'):
+            if st.button('Esegui confronto 2 ingressi × 3 uscite',type='primary',key='abc_run'):
                 rows_abc=[]
                 operations_abc=[]
                 errors_abc=[]
@@ -221,7 +221,7 @@ if section=='Confronto uscite':
             abc=st.session_state.get('abc_results')
             if abc:
                 if abc['revision']!=revision or abc['periodo']!=(str(period_from),str(period_to)):
-                    st.warning('Risultati riferiti ad altri dati o date: premi nuovamente Esegui confronto A/B/C.')
+                    st.warning('Risultati riferiti ad altri dati o date: ripeti il confronto.')
                 else:
                     frame=pd.DataFrame(abc['rows'])
                     if not frame.empty:
@@ -229,7 +229,7 @@ if section=='Confronto uscite':
                         st.download_button('Scarica confronto uscite CSV',csv_bytes(frame),'trend_lab_confronto_uscite.csv','text/csv')
                         if not abc['trades'].empty:
                             st.download_button('Scarica operazioni per uscita CSV',csv_bytes(abc['trades']),'trend_lab_operazioni_per_uscita.csv','text/csv')
-                        st.caption('Le posizioni aperte sono valorizzate separatamente. Per il Supertrend occorre una verifica con ta.supertrend di TradingView; risultati retrospettivi, NON un edge validato. I preset non accreditano dividendi come flussi separati.')
+                        st.caption('La terza uscita combina Forces HA 10/4 non positivo con HA rossa, OPPURE trailing 5% dalla massima chiusura del trade; sempre next open. Il +57,7% storico riguardava ingresso B, ma non è confermato dalla nuova app. Supertrend e Forces vanno confrontati con TradingView; no edge validato.')
                     if abc['errors']:
                         st.dataframe(pd.DataFrame(abc['errors']),hide_index=True,width='stretch')
 if section=='Screener':
