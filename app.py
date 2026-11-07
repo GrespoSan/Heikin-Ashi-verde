@@ -18,6 +18,7 @@ from data_sources import yahoo,alpaca,read_import,completed_bars
 from research_presets import PRESET_VERSION, PRESETS, EXIT_METHODS, PRESET_DESCRIPTIONS, prepare_preset_features, simulate_preset
 from quality_audit import audit_ohlc_bars, quality_overview
 from validation_benchmarks import FINALISTS, strategy_metrics, passive_metrics, matched_benchmark
+from entry_ablation import ABLATION_VERSION, VARIANTS, evaluate_ablation_universe
 st.set_page_config(page_title='G. Trend Lab',page_icon='🧪',layout='wide')
 st.title('G. Trend Lab')
 st.caption('v1.6.0 · Audit OHLC · confronto uscite · benchmark Buy & Hold e SPY')
@@ -194,7 +195,7 @@ with st.expander("Qualità dati — titoli esclusi, date e prezzi OHLC anomali",
         st.download_button('Scarica dettaglio barre anomale CSV',csv_bytes(quality_bars),'trend_lab_barre_ohlc_anomale.csv','text/csv',key='quality_bars_export')
     else:
         st.success("Nessuna barra OHLC anomala rilevata negli storici caricati.")
-section=st.radio('Sezione',['Screener','Backtest','Confronto uscite','Confronto','Dati e metodo'],horizontal=True,key='section')
+section=st.radio('Sezione',['Screener','Backtest','Confronto uscite','Ablazione ingressi','Confronto','Dati e metodo'],horizontal=True,key='section')
 if section=='Confronto uscite':
     st.caption('**Confronto congelato, indipendente dalla barra laterale:** ingresso A Forces Standard 7/7 · ingresso B Forces HA 7/7 · EMA200 · uscite Forces Standard/HA 10/4, Supertrend 10×2, HA + trailing 5%, E2, E5.')
     st.subheader('Confronto uscite — 2 ingressi × 5 uscite')
@@ -311,6 +312,75 @@ if section=='Confronto uscite':
                         err_df=pd.DataFrame(abc['errors'])
                         st.dataframe(err_df,hide_index=True,width='stretch')
                         st.download_button('Scarica titoli esclusi CSV',csv_bytes(err_df),'trend_lab_titoli_esclusi.csv','text/csv',key='comparison_exclusions')
+if section=='Ablazione ingressi':
+    st.subheader('Ablazione degli ingressi — uscita Supertrend 10×2 congelata')
+    st.caption(f'Protocollo {ABLATION_VERSION} · confronto causale dei filtri · costo storico 0,15% per lato · nessuna ottimizzazione dei parametri')
+    st.warning('Il riferimento storico vende ogni volta che Supertrend è in regime ribassista alla chiusura precedente, non soltanto su un nuovo incrocio. Il test B completo viene riconciliato con la funzione originale prima di accettare ogni ticker.')
+    st.write('Varianti testate: ' + ' · '.join(VARIANTS.keys()))
+    if timeframe!='Daily':
+        st.error('Ablazioni disponibili soltanto in Daily.')
+    elif instrument=='Futures (contratto singolo)':
+        st.error('Questo motore simula azioni/ETF, non il PnL futures.')
+    else:
+        earliest=min(df.index[0].date() for df in data.values())
+        latest=max(df.index[-1].date() for df in data.values())
+        c1,c2=st.columns(2)
+        abl_start=c1.date_input('Inizio test ingressi',value=max(earliest,date(2016,1,4)),min_value=earliest,max_value=latest,key='abl_start')
+        abl_end=c2.date_input('Fine test ingressi',value=latest,min_value=earliest,max_value=latest,key='abl_end')
+        st.caption('Le serie sono quelle già caricate; in assenza dei dati storici OHLC non è possibile ricostruire i segnali esclusi. Gli export precedenti delle operazioni non sono sufficienti.')
+        if st.button('Esegui ablazione 5 ingressi × Supertrend fisso',type='primary',key='abl_run'):
+            if abl_start>abl_end:
+                st.error('Intervallo temporale non valido.')
+            else:
+                spy_for_ablation=data.get('SPY')
+                if spy_for_ablation is None and source != 'CSV / JSON':
+                    try:
+                        k=secrets_value('ALPACA_API_KEY')
+                        secret=secrets_value('ALPACA_SECRET_KEY')
+                        raw_spy=fetch_cached('SPY',str(history_start),str(TODAY+timedelta(days=1)),source,adjustment,feed,k,secret,hashlib.sha256(k.encode()).hexdigest()[:12],repair_ohlc)
+                        spy_for_ablation,_=completed_bars(raw_spy,'SPY','USA','Daily',repair=repair_ohlc)
+                        if audit_ohlc_bars(spy_for_ablation,'SPY',origin_label):
+                            spy_for_ablation=None
+                    except Exception:
+                        spy_for_ablation=None
+                rows_ab,excluded_ab=evaluate_ablation_universe(data,abl_start,abl_end,spy_for_ablation)
+                st.session_state.abl_result={'rows':rows_ab,'excluded':excluded_ab,'revision':revision,
+                    'dates':(str(abl_start),str(abl_end)),'version':ABLATION_VERSION}
+        result_ab=st.session_state.get('abl_result')
+        if result_ab:
+            if (result_ab['revision']!=revision or result_ab['dates']!=(str(abl_start),str(abl_end))
+                or result_ab['version']!=ABLATION_VERSION):
+                st.warning('Risultati precedenti: rieseguire con i dati e le date correnti.')
+            else:
+                ab=result_ab['rows']
+                if ab.empty:
+                    st.error('Nessun ticker ha superato la verifica del riferimento congelato.')
+                else:
+                    st.success(f'{ab.Ticker.nunique()} titoli coerenti con il riferimento B congelato; {len(ab)} righe di ablazione.')
+                    st.dataframe(ab,hide_index=True,width='stretch')
+                    st.download_button('Scarica ablazioni ingressi CSV',csv_bytes(ab),'trend_lab_ablazioni_ingressi.csv','text/csv',key='abl_export')
+                    group=ab.groupby('Variante',sort=False).agg(
+                        Titoli=('Ticker','nunique'),
+                        CAGR_mediano=('CAGR %','median'),
+                        CAGR_medio=('CAGR %','mean'),
+                        DD_mediano=('Drawdown %','median'),
+                        Esposizione_media=('Esposizione media %','mean'),
+                        Ingressi_medi=('Ingressi','mean'),
+                        Calmar_mediano=('Calmar','median'),
+                        Delta_BH_mediano=('Differenza CAGR vs titolo (pp)','median'),
+                    ).reset_index()
+                    st.subheader('Sintesi descrittiva per variante')
+                    st.dataframe(group,hide_index=True,width='stretch')
+                    st.download_button('Scarica sintesi ablazioni CSV',csv_bytes(group),'trend_lab_ablazioni_sintesi.csv','text/csv',key='abl_summary')
+                    st.caption('La sintesi non costituisce selezione fuori campione; titoli/periodi esaminati durante lo sviluppo sono contaminati per la scelta dei filtri. Turnover espresso come numero di lati e non in capitale monetario.')
+                ex=result_ab['excluded']
+                if not ex.empty:
+                    st.warning(f'{len(ex)} ticker esclusi o non riconciliati, senza risultati sostitutivi.')
+                    st.dataframe(ex,hide_index=True,width='stretch')
+                    st.download_button('Scarica esclusioni ablazioni CSV',csv_bytes(ex),'trend_lab_ablazioni_esclusi.csv','text/csv',key='abl_excluded')
+                if spy_for_ablation is None:
+                    st.info('SPY non disponibile nel dataset o nel feed: benchmark SPY N/D.')
+
 if section=='Screener':
     features={};screen_quality={}
     for symbol,df in data.items():
