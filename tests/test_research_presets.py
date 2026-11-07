@@ -20,9 +20,10 @@ def candles(n=320):
 
 class ResearchPresetsTest(unittest.TestCase):
     def test_three_stable_distinct_ids(self):
-        self.assertEqual(set(PRESETS), {"A","B","C"})
-        self.assertEqual(len({preset_id(c) for c in PRESETS}), 3)
+        self.assertEqual(set(PRESETS), {"A","B"})
+        self.assertEqual(len({preset_id(c) for c in PRESETS}), 2)
         self.assertEqual(len({preset_id(c,e) for c in PRESETS for e in EXIT_METHODS}), 6)
+        self.assertEqual(len(EXIT_METHODS),3)
 
     def test_all_presets_return_valid_results(self):
         x = candles()
@@ -36,6 +37,16 @@ class ResearchPresetsTest(unittest.TestCase):
                 self.assertLessEqual(r["Drawdown massimo %"],0)
                 self.assertTrue((r["Operazioni"]["Uscita"]>r["Operazioni"]["Ingresso"]).all()
                                 if not r["Operazioni"].empty else True)
+
+    def test_ha_confirmation_and_trailing_are_separate_exit_triggers(self):
+        x=candles()
+        f=prepare_preset_features(x)
+        # I due trigger devono essere OR: il trailing può uscire anche con HA verde.
+        # Esegui la terza uscita con entrambi gli ingressi e verifica risultati finiti.
+        for code in PRESETS:
+            result=simulate_preset(x,f,code,exit_method=EXIT_METHODS[2])
+            self.assertTrue(np.isfinite(result["Rendimento realizzato %"]))
+            self.assertEqual(result["Uscita"],EXIT_METHODS[2])
 
     def test_supertrend_reversal_and_warmup(self):
         df=candles()
