@@ -1,42 +1,35 @@
 # G. Trend Lab
 
-## Confronto essenziale — due ingressi e tre uscite (07/11/2026)
+## Laboratorio LONG — 2 ingressi × 5 uscite (07/11/2026)
 
-Ramo sperimentale: non modifica la versione attualmente pubblicata su Streamlit.
-Nel menu **Confronto uscite**, caricare uno storico Daily di OHLC Standard e
-cliccare **Esegui confronto 2 ingressi × 3 uscite**.
+La scheda **Confronto uscite** confronta **10 configurazioni congelate** su
+dati OHLC Standard Daily. Per eseguire: caricare i dati e selezionare
+**Esegui confronto 2 ingressi × 5 uscite**. Il resto dello screener e del
+backtest configurabile è indipendente.
 
-**Ingressi congelati**
-- **A**: Forces Standard SMA7/EMA7 passa da <=0 a >0; HA verde; Close Standard > EMA200.
-- **B**: Forces Heikin Ashi SMA7/EMA7 passa da <=0 a >0; HA verde; Close Standard > EMA200.
+**Ingressi:**
+- A: HA verde, Forces su prezzi Standard 7/7 che attraversa zero verso l'alto, Close Standard > EMA200.
+- B: HA verde, Forces su prezzi Heikin Ashi 7/7 che attraversa zero verso l'alto, Close Standard > EMA200.
 
-**Uscite** (applicate indipendentemente a ciascun ingresso)
-1. **Forces 10/4 Standard <=0** al close, vendi all'open successivo.
-2. **Supertrend ATR Wilder 10, fattore 2** ribassista al close, vendi all'open successivo.
-3. **Forces HA 10/4 <=0 E candela HA rossa, O trailing 5%**: il trailing si attiva
-   se la massima CHIUSURA Standard durante il trade supera il prezzo d'ingresso
-   corretto per i costi e se (max_close - close_attuale) / prezzo_ingresso >= 5%.
-   Segnale al close e vendita all'open successivo, non è uno stop intraday.
+**Uscite:**
+1. Forces Standard 10/4 diventa non positivo; ordine all'open successivo.
+2. Supertrend Wilder ATR10 moltiplicatore 2 diventa ribassista; ordine all'open successivo.
+3. Forces HA 10/4 non positivo **e** HA rossa, **oppure** trailing 5% dalla massima chiusura, calcolato rispetto al prezzo d'ingresso; ordine all'open successivo. Il trailing **non** è uno stop intraday.
+4. E2: Forces Standard 10/4 ancora positivo, ma in diminuzione per due chiusure consecutive **dopo l'ingresso**; vendita completa al prossimo open. Se Forces diventa non positivo prima, vendita completa di sicurezza.
+5. E5: stessa attenuazione E2, vendita del **50%** al prossimo open; restante 50% venduto quando Forces Standard 10/4 diventa non positivo. Se prima del parziale Forces arriva a zero, si vende direttamente il 100%. La liquidità del parziale resta ferma, senza reinvestimento.
 
-**Perché non compare il preset C?** L'ingresso del vecchio preset C era
-identico a quello di A: differiva solo la sorgente Forces dell'uscita.
-Il laboratorio deve confrontare ingressi distinti, non duplicati; l'uscita
-Forces HA rimane disponibile nella terza opzione.
+Tutte le vendite usano un costo ipotizzato dello 0,15% per lato e prezzo
+effettivo all'open successivo; E5 registra ciascuna esecuzione e calcola i
+costi proporzionalmente alla quantità venduta. Una sola posizione long per
+titolo. I trade chiusi e le posizioni ancora aperte sono distinguibili,
+con CSV dettagliato di **tutte le esecuzioni**.
 
-Il valore storico **+57,7% mediano, 12/16 titoli positivi** riguardava B con
-l'uscita 3, non è ancora replicato/verificato con questo motore. **Non** è il
-risultato attuale di tutta la matrice.
-
-Modello: una posizione alla volta per titolo, ingresso/uscita all'open
-successivo, costo stimato 0,15% per lato, nessun rientro nello stesso open
-di uscita; posizioni aperte riportate separatamente. I risultati si riferiscono
-a prezzi azionari Daily e non simulano margini/rollover futures. Il backtest
-dell'app e le altre sezioni restano autonomi.
-
-**Prima di pubblicare:** eseguire test automatici, allineare barra per barra
-Supertrend con TradingView Pine `ta.supertrend(2,10)`, confrontare Forces/HA
-e trading signals, verificare feed/corporate actions, e non selezionare
-parametri usando il periodo successivamente dichiarato fuori campione.
+**Limitazioni:** il +57,7% mediano storico su B con uscita 3 è una stima
+esplorativa, non un risultato certificato della presente versione.
+Verificare equivalenza Supertrend rispetto a TradingView, fonti dati,
+dividendi e corporate actions; non confondere backtest in-sample con edge
+fuori campione. Il motore di confronto è azionario e non replica il PnL
+dei futures o il relativo rollover.
 
 ## Ripristino
 
