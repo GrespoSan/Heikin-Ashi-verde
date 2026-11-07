@@ -5,6 +5,8 @@ on:
     paths:
       - 'app.py'
       - 'entry_ablation.py'
+      - 'rotation_reserved.py'
+      - 'portfolio_validation.py'
       - 'research_presets.py'
       - 'validation_benchmarks.py'
       - 'tests/**'
@@ -25,6 +27,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pytest
       - name: Compile modules
-        run: python -m py_compile app.py entry_ablation.py research_presets.py validation_benchmarks.py
+        run: python -m py_compile app.py entry_ablation.py research_presets.py validation_benchmarks.py portfolio_validation.py rotation_reserved.py
       - name: Test
         run: pytest -q
