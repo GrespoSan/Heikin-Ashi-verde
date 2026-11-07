@@ -20,9 +20,10 @@ from quality_audit import audit_ohlc_bars, quality_overview
 from validation_benchmarks import FINALISTS, strategy_metrics, passive_metrics, matched_benchmark
 from entry_ablation import ABLATION_VERSION, VARIANTS, evaluate_ablation_universe
 from portfolio_validation import PORTFOLIO_VERSION, portfolio_lump_sum
+from rotation_reserved import ROTATION_VERSION, RANKING_METHODS, compare_capacities
 st.set_page_config(page_title='G. Trend Lab',page_icon='🧪',layout='wide')
 st.title('G. Trend Lab')
-st.caption('v1.7.0 · Audit OHLC · ablazioni ingressi · validazione portafoglio')
+st.caption('v1.8.0 · Audit OHLC · portafoglio · rotazione a quote riservate')
 # I risultati sono effimeri e dipendono dallo schema del motore, non solo dai parametri.
 SESSION_SCHEMA = 'trend-lab-results-4'
 def compatible_result(value):
@@ -196,7 +197,7 @@ with st.expander("Qualità dati — titoli esclusi, date e prezzi OHLC anomali",
         st.download_button('Scarica dettaglio barre anomale CSV',csv_bytes(quality_bars),'trend_lab_barre_ohlc_anomale.csv','text/csv',key='quality_bars_export')
     else:
         st.success("Nessuna barra OHLC anomala rilevata negli storici caricati.")
-section=st.radio('Sezione',['Screener','Backtest','Confronto uscite','Ablazione ingressi','Validazione Portafoglio','Confronto','Dati e metodo'],horizontal=True,key='section')
+section=st.radio('Sezione',['Screener','Backtest','Confronto uscite','Ablazione ingressi','Validazione Portafoglio','Rotazione Capitale','Confronto','Dati e metodo'],horizontal=True,key='section')
 if section=='Confronto uscite':
     st.caption('**Confronto congelato, indipendente dalla barra laterale:** ingresso A Forces Standard 7/7 · ingresso B Forces HA 7/7 · EMA200 · uscite Forces Standard/HA 10/4, Supertrend 10×2, HA + trailing 5%, E2, E5.')
     st.subheader('Confronto uscite — 2 ingressi × 5 uscite')
@@ -437,6 +438,80 @@ if section=='Validazione Portafoglio':
                     st.dataframe(p['excluded'],hide_index=True,width='stretch')
                     st.download_button('Scarica esclusioni CSV',csv_bytes(p['excluded']),'trend_lab_portafoglio_esclusi.csv','text/csv',key='pf_excluded')
                 st.caption('Turnover nozionale = somma degli importi eseguiti / capitale iniziale. I drawdown comprendono le oscillazioni delle posizioni ancora aperte. Per il rischio operativo reale vanno aggiunti spread, tasse, FX, liquidità, limiti di negoziazione e gestione di eventi societari.')
+
+if section=='Rotazione Capitale':
+    st.subheader('Rotazione Capitale — massimo 1, 2 o 3 titoli')
+    st.caption(f'Protocollo {ROTATION_VERSION} · B Forces HA 7/7 + HA verde + EMA200 · uscita Supertrend 10×2 invariata')
+    st.info('Versamento unico, quote iniziali riservate: con 10.000 € e capacità 3, ogni slot parte con 3.333,33 €. Uno slot liquidato può finanziare un nuovo titolo, ma non trasferisce capitale agli altri slot. Liquidità residua allo 0%; posizioni marcate al close ogni seduta.')
+    st.warning('Le graduatorie sono sperimentali e definite prima del test: ordine ticker alfabetico (controllo), oppure momentum delle 63 chiusure precedenti. Nessuna scelta dei titoli in base ai rendimenti futuri. I segnali in eccesso vengono registrati come non eseguiti.')
+    if timeframe != 'Daily' or instrument != 'Azioni / ETF / spot':
+        st.error('Per questa simulazione sono richiesti Daily e modello Azioni / ETF / spot.')
+    else:
+        cols=st.columns(2)
+        r_start=cols[0].date_input('Inizio rotazione',value=max(date(2016,10,19),min(v.index[0].date() for v in data.values())),key='rotation_start')
+        r_end=cols[1].date_input('Fine rotazione',value=max(v.index[-1].date() for v in data.values()),key='rotation_end')
+        r_cap=st.number_input('Capitale iniziale una tantum',min_value=1000.,value=10000.,step=1000.,key='rotation_cap')
+        r_currency=st.selectbox('Valuta di simulazione',options=['USD','EUR (senza conversione FX, solo unità contabile)'],key='rotation_ccy')
+        st.caption('Per azioni USA, i prezzi e il capitale operativo sono in USD. La selezione EUR senza cambio è solo un confronto nominale, NON un rendimento effettivo in euro.')
+        st.markdown('**Simulazioni richieste:** capacità 1, 2 e 3 contemporaneamente; vengono confrontati entrambi i criteri di priorità predefiniti.')
+        if st.button('Esegui 1 / 2 / 3 posizioni',type='primary',key='rotation_run'):
+            try:
+                if r_start >= r_end:
+                    raise ValueError('La data iniziale deve essere anteriore alla finale.')
+                if market!='USA':
+                    raise ValueError('Per ora il modulo è validato soltanto per azioni USA in USD: mercato Italia richiede un test specifico.')
+                if r_currency.startswith('EUR'):
+                    st.warning('Il confronto viene calcolato in USD nominali, senza includere la conversione EUR/USD.')
+                spy_rotation=data.get('SPY')
+                if spy_rotation is None and source != 'CSV / JSON':
+                    try:
+                        k=secrets_value('ALPACA_API_KEY')
+                        secret=secrets_value('ALPACA_SECRET_KEY')
+                        raw_spy=fetch_cached('SPY',str(history_start),str(TODAY+timedelta(days=1)),source,adjustment,feed,k,secret,hashlib.sha256(k.encode()).hexdigest()[:12],repair_ohlc)
+                        spy_rotation,_=completed_bars(raw_spy,'SPY','USA','Daily',repair=repair_ohlc)
+                        if audit_ohlc_bars(spy_rotation,'SPY',origin_label):
+                            spy_rotation=None
+                    except Exception:
+                        spy_rotation=None
+                summary_rotation,runs_rotation=compare_capacities(data,r_start,r_end,r_cap,spy=spy_rotation)
+                st.session_state.rotation_result={'summary':summary_rotation,'runs':runs_rotation,
+                    'revision':revision,'period':(str(r_start),str(r_end)),
+                    'capital':r_cap,'currency':r_currency,'protocol':ROTATION_VERSION}
+            except Exception as exc:
+                st.error(f'Rotazione non eseguita: {str(exc)[:350]}')
+        stored_rotation=st.session_state.get('rotation_result')
+        if stored_rotation:
+            if (stored_rotation['revision']!=revision
+                or stored_rotation['period']!=(str(r_start),str(r_end))
+                or stored_rotation['capital']!=r_cap
+                or stored_rotation['currency']!=r_currency
+                or stored_rotation['protocol']!=ROTATION_VERSION):
+                st.warning('I risultati sono relativi a input precedenti: rieseguire il confronto.')
+            else:
+                sr=stored_rotation['summary']
+                st.subheader('Confronto 1 / 2 / 3 quote riservate')
+                st.dataframe(sr,hide_index=True,width='stretch')
+                st.download_button('Scarica riepilogo rotazione CSV',csv_bytes(sr),'trend_lab_rotazione_sintesi.csv','text/csv',key='rotation_summary_export')
+                choice_rank=st.selectbox('Graduatoria da esaminare',options=RANKING_METHODS,key='rotation_rank_view')
+                choice_cap=st.radio('Capacità da esaminare',[1,2,3],horizontal=True,key='rotation_slots_view')
+                selected=stored_rotation['runs'][(choice_cap,choice_rank)]
+                st.subheader(f'Dettaglio: {choice_cap} slot — {choice_rank}')
+                st.dataframe(pd.DataFrame([selected['metrics']]),hide_index=True,width='stretch')
+                performance=selected['curve'].set_index('Data')[['Patrimonio']].rename(columns={'Patrimonio':'Rotazione'})
+                if not selected['spy_curve'].empty:
+                    performance=performance.join(selected['spy_curve'].set_index('Data')[['Patrimonio']].rename(columns={'Patrimonio':'SPY'}),how='left')
+                    st.dataframe(pd.DataFrame([selected['spy_metrics']]),hide_index=True,width='stretch')
+                else:
+                    st.warning('SPY benchmark N/D: manca storico all’inizio del periodo. Nessuna sostituzione automatica.')
+                st.line_chart(performance)
+                st.download_button('Scarica curva giornaliera',csv_bytes(selected['curve']),'trend_lab_rotazione_equity.csv','text/csv',key='rotation_curve_export')
+                st.download_button('Scarica tutte le esecuzioni',csv_bytes(selected['fills']),'trend_lab_rotazione_esecuzioni.csv','text/csv',key='rotation_fills_export')
+                st.download_button('Scarica posizioni finali',csv_bytes(selected['holdings']),'trend_lab_rotazione_posizioni.csv','text/csv',key='rotation_holdings_export')
+                if not selected['excluded'].empty:
+                    st.warning(f"{len(selected['excluded'])} titoli esclusi per dati non validi.")
+                    st.dataframe(selected['excluded'],hide_index=True,width='stretch')
+                    st.download_button('Scarica esclusi rotazione',csv_bytes(selected['excluded']),'trend_lab_rotazione_esclusi.csv','text/csv',key='rotation_excluded_export')
+                st.caption('Costi: 0,15% per lato. Nessuna leva, finanziamento, imposte, FX, interessi o accredito dividendi. Quote frazionarie; vendita e nuovo acquisto nello stesso giorno su slot diverso sono consentiti, ma lo slot venduto viene riutilizzato soltanto dalla seduta successiva. Non è un test fuori campione né un modello eseguibile automaticamente.')
 
 if section=='Screener':
     features={};screen_quality={}
