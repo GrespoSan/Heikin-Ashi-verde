@@ -58,7 +58,7 @@ def portfolio_lump_sum(data, start, end, capital=100000.0, spy=None):
     if not instruments: raise ValueError("Nessuna serie valida dopo audit OHLC/warmup")
     slot = float(capital) / len(instruments)
     for item in instruments.values(): item["cash"]=slot
-    calendars=[f.index[(f.index>=start)&(f.index<=end)] for f in data.values()]
+    calendars=[it["frame"].index[(it["frame"].index>=start)&(it["frame"].index<=end)] for it in instruments.values()]
     if spy is not None and not spy.empty:
         calendars.append(spy.index[(spy.index>=start)&(spy.index<=end)])
     days=pd.DatetimeIndex(sorted(set().union(*(set(x) for x in calendars))))
