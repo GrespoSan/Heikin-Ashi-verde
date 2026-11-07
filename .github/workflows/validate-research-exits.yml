@@ -4,6 +4,8 @@ on:
     paths:
       - 'research_presets.py'
       - 'app.py'
+      - 'quality_audit.py'
+      - 'tests/test_quality_audit.py'
       - 'engine.py'
       - 'tests/test_research_presets.py'
       - 'tests/test_streamlit_smoke.py'
@@ -29,9 +31,12 @@ jobs:
       - name: Install testing requirements
         run: python -m pip install --disable-pip-version-check numpy pandas streamlit plotly
       - name: Compile research code
-        run: python -m py_compile app.py research_presets.py engine.py tests/test_research_presets.py tests/test_streamlit_smoke.py
+        run: python -m py_compile app.py quality_audit.py research_presets.py engine.py tests/test_research_presets.py tests/test_streamlit_smoke.py tests/test_quality_audit.py
       - name: Run research preset tests
         run: python -m unittest discover -s tests -p 'test_research_presets.py' -v
 
       - name: Smoke test Streamlit 10 combinations
         run: python -m unittest discover -s tests -p 'test_streamlit_smoke.py' -v
+
+      - name: OHLC audit tests
+        run: python -m unittest discover -s tests -p 'test_quality_audit.py' -v
