@@ -2,7 +2,7 @@
 import unittest
 import numpy as np
 import pandas as pd
-from research_presets import PRESETS, prepare_preset_features, simulate_preset, preset_id
+from research_presets import PRESETS, EXIT_METHODS, prepare_preset_features, simulate_preset, preset_id, supertrend_10x2
 
 
 def candles(n=320):
@@ -22,18 +22,33 @@ class ResearchPresetsTest(unittest.TestCase):
     def test_three_stable_distinct_ids(self):
         self.assertEqual(set(PRESETS), {"A","B","C"})
         self.assertEqual(len({preset_id(c) for c in PRESETS}), 3)
+        self.assertEqual(len({preset_id(c,e) for c in PRESETS for e in EXIT_METHODS}), 6)
 
     def test_all_presets_return_valid_results(self):
         x = candles()
         features = prepare_preset_features(x)
         for c in PRESETS:
-            with self.subTest(preset=c):
-                r = simulate_preset(x,features,c)
+            for exit_method in EXIT_METHODS:
+              with self.subTest(preset=c,exit_method=exit_method):
+                r = simulate_preset(x,features,c,exit_method=exit_method)
                 self.assertEqual(r["Preset"],c)
                 self.assertTrue(np.isfinite(r["Rendimento realizzato %"]))
                 self.assertLessEqual(r["Drawdown massimo %"],0)
                 self.assertTrue((r["Operazioni"]["Uscita"]>r["Operazioni"]["Ingresso"]).all()
                                 if not r["Operazioni"].empty else True)
+
+    def test_supertrend_reversal_and_warmup(self):
+        df=candles()
+        line=supertrend_10x2(df)
+        self.assertTrue(np.isnan(line[:9]).all())
+        self.assertTrue(np.isin(line[9:],[0.0,1.0]).all())
+        self.assertEqual(len(line),len(df))
+
+    def test_supertrend_rejects_invalid_method(self):
+        x=candles()
+        f=prepare_preset_features(x)
+        with self.assertRaises(ValueError):
+            simulate_preset(x,f,"A",exit_method="Inesistente")
 
     def test_forces_sources_not_identical(self):
         f = prepare_preset_features(candles())
