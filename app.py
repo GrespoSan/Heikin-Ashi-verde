@@ -214,7 +214,7 @@ if section=='Confronto uscite':
                                     tx=res['Operazioni'].copy()
                                     tx.insert(0,'Ticker',symbol)
                                     tx.insert(1,'Preset',preset)
-                                    tx.insert(2,'Uscita',exit_method)
+                                    tx.insert(2,'Metodo uscita',exit_method)
                                     operations_abc.append(tx)
                                 if not res['Esecuzioni'].empty:
                                     fills=res['Esecuzioni'].copy()
