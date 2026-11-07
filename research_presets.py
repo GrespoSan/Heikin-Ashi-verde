@@ -70,7 +70,7 @@ def supertrend_10x2(df):
         if i==9:
             upper[i]=basic_upper
             lower[i]=basic_lower
-            bullish[i]=1.0  # seme del regime: da confrontare con ta.supertrend
+            bullish[i]=0.0  # TradingView inizializza in regime ribassista alla prima ATR valida
             continue
         upper[i]=(basic_upper if basic_upper<upper[i-1] or close[i-1]>upper[i-1]
                   else upper[i-1])
@@ -184,7 +184,7 @@ def simulate_preset(df, features, code, start=None, end=None, exit_method="Force
                    if position else result_equity)
     ret = [t["Rendimento netto %"] for t in trades]
     return {
-        "Preset": code, "ID": preset_id(code, exit_method), "Descrizione": PRESET_DESCRIPTIONS[code],
+        "Preset": code, "ID": preset_id(code, exit_method), "Descrizione": PRESET_DESCRIPTIONS[code] if exit_method == "Forces 10/4" else PRESET_DESCRIPTIONS[code].split("; uscita")[0]+"; uscita Supertrend 10x2",
         "Uscita": exit_method,
         "Trade chiusi": len(trades),
         "Vincenti %": 100*sum(x>0 for x in ret)/len(ret) if ret else np.nan,
