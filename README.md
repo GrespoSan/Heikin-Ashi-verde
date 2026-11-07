@@ -1,5 +1,16 @@
 # G. Trend Lab
 
+## Validazione finaliste e azioni satellite (v1.6.0, 07/11/2026)
+
+- La dicitura Forces Standard/HA 3/3 in alto si riferiva esclusivamente a Screener/Backtest manuale: ora l'interfaccia distingue esplicitamente i parametri configurabili da quelli del confronto congelato A/B 7/7.
+- In Confronto uscite, dopo «Esegui confronto», la sezione «Validazione preliminare» presenta le **due uscite finaliste**: Supertrend 10x2 e Forces HA + HA rossa + trailing 5%, con entrambi gli ingressi A/B, e i benchmark Buy & Hold del ticker e SPY.
+- Dati e benchmark devono usare la stessa fonte/prezzi rettificati e lo stesso intervallo di calendario. SPY è recuperato dalla medesima fonte/feed del confronto; se non disponibile è N/D, senza fallback. SPY usa le proprie sedute realmente disponibili nella finestra comune (festività USA/Italia diverse).
+- Metriche: rendimento totale **mark-to-market** delle posizioni ancora aperte, CAGR annualizzato sulla durata effettiva, drawdown close-to-close, quota media del capitale investita (0/100% per A/B finaliste) e Calmar = CAGR/|drawdown|. Include costo 0,15% per lato e acquisto iniziale all'open per i benchmark passivi.
+- Esporre il benchmark **non prova un edge**, né elimina survivorship bias, corporate actions o il rischio cambio EUR/USD nei confronti Italia/SPY.
+- Per provare il secondo gruppo storico di **39 azioni satellite italiane**, selezionare Mercato Italia, Fonte Yahoo e attivare «Universo storico: 39 azioni satellite Italia». Avviare caricamento e confronto; verificare il pannello esclusioni. I 39 simboli sono un elenco storico di ricerca, non un universo investibile point-in-time validato. Ticker delistati o mutati possono essere indisponibili.
+- La precedente lista USA di 63 titoli non include SPY: la nuova versione tenta il caricamento separato di SPY per i benchmark, senza aggiungerlo ai titoli della strategia.
+
+
 ## Laboratorio LONG — 2 ingressi × 5 uscite (07/11/2026)
 
 La scheda **Confronto uscite** confronta **10 configurazioni congelate** su
