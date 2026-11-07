@@ -48,6 +48,41 @@ class ResearchPresetsTest(unittest.TestCase):
             self.assertTrue(np.isfinite(result["Rendimento realizzato %"]))
             self.assertEqual(result["Uscita"],EXIT_METHODS[2])
 
+    def test_trailing_trigger_without_ha_red(self):
+        df=candles()
+        # Segnale ingresso unico, HA sempre verde. Il max close in trade
+        # 110 seguito da 104 fa scattare il trailing al close, uscita next open.
+        for i,p in ((220,100.0),(221,100.0),(222,110.0),(223,104.0),(224,103.0)):
+            df.iloc[i,df.columns.get_loc("open")]=p
+            df.iloc[i,df.columns.get_loc("close")]=p
+        features=prepare_preset_features(candles())
+        features["ha_green"]=np.ones(len(df),dtype=bool)
+        features["ema200"]=np.zeros(len(df))
+        signal=np.full(len(df),-1.0)
+        signal[220]=1.0
+        features[("Heikin Ashi",7,7)]=signal
+        features[("Heikin Ashi",10,4)]=np.ones(len(df))
+        result=simulate_preset(df,features,"B",exit_method=EXIT_METHODS[2])
+        self.assertFalse(result["Operazioni"].empty)
+        self.assertEqual(result["Operazioni"].iloc[0]["Ingresso"],df.index[221])
+        self.assertEqual(result["Operazioni"].iloc[0]["Uscita"],df.index[224])
+
+    def test_ha_confirmation_trigger_without_trailing(self):
+        df=candles()
+        features=prepare_preset_features(df)
+        features["ha_green"]=np.ones(len(df),dtype=bool)
+        features["ha_green"][223]=False
+        features["ema200"]=np.zeros(len(df))
+        signal=np.full(len(df),-1.0)
+        signal[220]=1.0
+        features[("Heikin Ashi",7,7)]=signal
+        exit_forces=np.ones(len(df))
+        exit_forces[223]=-1.0
+        features[("Heikin Ashi",10,4)]=exit_forces
+        result=simulate_preset(df,features,"B",exit_method=EXIT_METHODS[2])
+        self.assertFalse(result["Operazioni"].empty)
+        self.assertEqual(result["Operazioni"].iloc[0]["Uscita"],df.index[224])
+
     def test_supertrend_reversal_and_warmup(self):
         df=candles()
         line=supertrend_10x2(df)
