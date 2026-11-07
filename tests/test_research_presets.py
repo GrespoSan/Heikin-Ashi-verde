@@ -22,8 +22,8 @@ class ResearchPresetsTest(unittest.TestCase):
     def test_three_stable_distinct_ids(self):
         self.assertEqual(set(PRESETS), {"A","B"})
         self.assertEqual(len({preset_id(c) for c in PRESETS}), 2)
-        self.assertEqual(len({preset_id(c,e) for c in PRESETS for e in EXIT_METHODS}), 6)
-        self.assertEqual(len(EXIT_METHODS),3)
+        self.assertEqual(len({preset_id(c,e) for c in PRESETS for e in EXIT_METHODS}), 10)
+        self.assertEqual(len(EXIT_METHODS),5)
 
     def test_all_presets_return_valid_results(self):
         x = candles()
@@ -82,6 +82,51 @@ class ResearchPresetsTest(unittest.TestCase):
         result=simulate_preset(df,features,"B",exit_method=EXIT_METHODS[2])
         self.assertFalse(result["Operazioni"].empty)
         self.assertEqual(result["Operazioni"].iloc[0]["Uscita"],df.index[224])
+
+    def _fade_fixture(self, zero_before_fade=False):
+        df=candles()
+        f=prepare_preset_features(df)
+        f["ha_green"]=np.ones(len(df),dtype=bool)
+        f["ema200"]=np.zeros(len(df))
+        entry=np.full(len(df),-1.0)
+        entry[220]=1.0
+        f[("Standard",7,7)]=entry
+        forces=np.full(len(df),6.0)
+        if zero_before_fade:
+            forces[221]=0.0
+        else:
+            forces[220],forces[221],forces[222]=5.0,4.0,3.0
+            forces[223],forces[224],forces[225]=2.0,1.0,-1.0
+        f[("Standard",10,4)]=forces
+        return df,f
+
+    def test_e2_full_exit_on_second_consecutive_fade(self):
+        df,f=self._fade_fixture()
+        result=simulate_preset(df,f,"A",exit_method="Forces ↓2 o zero (E2)")
+        self.assertEqual(len(result["Operazioni"]),1)
+        self.assertEqual(result["Operazioni"].iloc[0]["Ingresso"],df.index[221])
+        self.assertEqual(result["Operazioni"].iloc[0]["Uscita"],df.index[223])
+        self.assertEqual(len(result["Esecuzioni"]),1)
+        self.assertEqual(result["Esecuzioni"].iloc[0]["Frazione venduta"],1.0)
+
+    def test_e5_half_then_rest_at_zero_with_proportional_costs(self):
+        df,f=self._fade_fixture()
+        result=simulate_preset(df,f,"A",exit_method="50% ↓2 + 50% zero (E5)")
+        tx=result["Esecuzioni"]
+        self.assertEqual(len(tx),2)
+        self.assertEqual(list(tx["Frazione venduta"]),[.5,.5])
+        self.assertEqual(list(tx["Data"]),[df.index[223],df.index[226]])
+        bought=df.open.iloc[221]*1.0015
+        expected=.5*df.open.iloc[223]*.9985/bought+.5*df.open.iloc[226]*.9985/bought
+        self.assertAlmostEqual(result["Rendimento realizzato %"],(expected-1)*100,places=8)
+        self.assertTrue(bool(result["Operazioni"].iloc[0]["Prelievo parziale"]))
+
+    def test_e5_goes_to_zero_before_fade_full_exit(self):
+        df,f=self._fade_fixture(zero_before_fade=True)
+        result=simulate_preset(df,f,"A",exit_method="50% ↓2 + 50% zero (E5)")
+        self.assertEqual(len(result["Esecuzioni"]),1)
+        self.assertEqual(result["Esecuzioni"].iloc[0]["Data"],df.index[222])
+        self.assertEqual(result["Esecuzioni"].iloc[0]["Frazione venduta"],1.0)
 
     def test_supertrend_reversal_and_warmup(self):
         df=candles()
