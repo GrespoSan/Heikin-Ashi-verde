@@ -442,17 +442,17 @@ if section=='Validazione Portafoglio':
 if section=='Rotazione Capitale':
     st.subheader('Rotazione Capitale — massimo 1, 2 o 3 titoli')
     st.caption(f'Protocollo {ROTATION_VERSION} · B Forces HA 7/7 + HA verde + EMA200 · uscita Supertrend 10×2 invariata')
-    st.info('Versamento unico, quote iniziali riservate: con 10.000 € e capacità 3, ogni slot parte con 3.333,33 €. Uno slot liquidato può finanziare un nuovo titolo, ma non trasferisce capitale agli altri slot. Liquidità residua allo 0%; posizioni marcate al close ogni seduta.')
-    st.warning('Le graduatorie sono sperimentali e definite prima del test: ordine ticker alfabetico (controllo), oppure momentum delle 63 chiusure precedenti. Nessuna scelta dei titoli in base ai rendimenti futuri. I segnali in eccesso vengono registrati come non eseguiti.')
+    st.info('Versamento unico, quote iniziali riservate: con 10.000 USD e capacità 3, ogni slot parte con 3.333,33 USD. Uno slot liquidato può finanziare un nuovo titolo, ma non trasferisce capitale agli altri slot. Liquidità residua allo 0%; posizioni marcate al close ogni seduta.')
+    st.warning('Le graduatorie sono sperimentali e definite prima del test: ordine ticker alfabetico (baseline deterministica, non casuale), oppure momentum delle 63 chiusure precedenti. Nessuna scelta dei titoli in base ai rendimenti futuri. I segnali in eccesso vengono registrati come non eseguiti.')
     if timeframe != 'Daily' or instrument != 'Azioni / ETF / spot':
         st.error('Per questa simulazione sono richiesti Daily e modello Azioni / ETF / spot.')
     else:
         cols=st.columns(2)
         r_start=cols[0].date_input('Inizio rotazione',value=max(date(2016,10,19),min(v.index[0].date() for v in data.values())),key='rotation_start')
         r_end=cols[1].date_input('Fine rotazione',value=max(v.index[-1].date() for v in data.values()),key='rotation_end')
-        r_cap=st.number_input('Capitale iniziale una tantum',min_value=1000.,value=10000.,step=1000.,key='rotation_cap')
-        r_currency=st.selectbox('Valuta di simulazione',options=['USD','EUR (senza conversione FX, solo unità contabile)'],key='rotation_ccy')
-        st.caption('Per azioni USA, i prezzi e il capitale operativo sono in USD. La selezione EUR senza cambio è solo un confronto nominale, NON un rendimento effettivo in euro.')
+        r_cap=st.number_input('Capitale iniziale una tantum (USD)',min_value=1000.,value=10000.,step=1000.,key='rotation_cap')
+        r_currency='USD'
+        st.caption('Modello esclusivamente in USD nominali. Per investire 10.000 € reali serviranno conversione EUR/USD, costi cambio e rischio valutario: non inclusi in questo test.')
         st.markdown('**Simulazioni richieste:** capacità 1, 2 e 3 contemporaneamente; vengono confrontati entrambi i criteri di priorità predefiniti.')
         if st.button('Esegui 1 / 2 / 3 posizioni',type='primary',key='rotation_run'):
             try:
@@ -460,8 +460,6 @@ if section=='Rotazione Capitale':
                     raise ValueError('La data iniziale deve essere anteriore alla finale.')
                 if market!='USA':
                     raise ValueError('Per ora il modulo è validato soltanto per azioni USA in USD: mercato Italia richiede un test specifico.')
-                if r_currency.startswith('EUR'):
-                    st.warning('Il confronto viene calcolato in USD nominali, senza includere la conversione EUR/USD.')
                 spy_rotation=data.get('SPY')
                 if spy_rotation is None and source != 'CSV / JSON':
                     try:
