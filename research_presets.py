@@ -10,8 +10,8 @@ import numpy as np
 import pandas as pd
 from engine import Indicators, calculate
 
-PRESET_VERSION = "AB-THREE-EXITS-2026-11-07-v3"
-EXIT_METHODS = ("Forces 10/4", "Supertrend 10x2", "Forces HA + HA rossa + trailing 5%")
+PRESET_VERSION = "AB-FIVE-EXITS-2026-11-07-v4"
+EXIT_METHODS = ("Forces 10/4", "Supertrend 10x2", "Forces HA + HA rossa + trailing 5%", "Forces ↓2 o zero (E2)", "50% ↓2 + 50% zero (E5)")
 PRESETS = {
     "A": ("Standard", "Standard"),
     "B": ("Heikin Ashi", "Standard"),
@@ -113,18 +113,22 @@ def prepare_preset_features(df):
 
 
 def simulate_preset(df, features, code, start=None, end=None, exit_method="Forces 10/4"):
-    """Costo 0,15% lato acquisto e vendita, composto, capitale teorico intero.
+    """Simulazione long full-allocation su una singola azione con costi 0,15% per lato.
 
-    La posizione aperta è riportata separatamente (mark-to-market), non come trade
-    realizzato. Nessun nuovo ingresso all'open di un'uscita. Nessun intraday stop.
+    E2: due diminuzioni consecutive del Forces Standard 10/4, ancora positivo,
+        oppure Forces <= 0 come uscita di sicurezza.
+    E5: vende metà dopo lo stesso segnale di attenuazione, il resto quando
+        Forces Standard 10/4 <=0; se Forces arriva a zero prima, chiude tutto.
+    Decisioni al close confermato, fill next open. Le parziali sono contabilizzate
+    nello stesso trade, senza capitalizzare separatamente il capitale già incassato.
     """
     if code not in PRESETS:
         raise ValueError("Preset sconosciuto")
     if exit_method not in EXIT_METHODS:
         raise ValueError("Uscita sconosciuta")
-    in_source, out_source = PRESETS[code]
+    in_source, _ = PRESETS[code]
     entry_force = features[(in_source,7,7)]
-    exit_force = features[(out_source,10,4)]
+    std_force_exit = features[("Standard",10,4)]
     st_bull = features["supertrend_10x2"]
     ha_force_exit = features[("Heikin Ashi",10,4)]
     ha = features["ha_green"]
@@ -134,82 +138,130 @@ def simulate_preset(df, features, code, start=None, end=None, exit_method="Force
     n = len(df)
     beginning = pd.Timestamp(start) if start is not None else df.index[0]
     finish = pd.Timestamp(end) if end is not None else df.index[-1]
-    # Il calcolo usa dati precedenti anche a start (warmup); le esecuzioni no.
+    if beginning > finish:
+        raise ValueError("Periodo inverso")
     equity = 1.0
-    top = 1.0
+    peak = 1.0
     worst_dd = 0.0
     position = False
     entry_price = np.nan
     entry_idx = -1
+    trade_capital = 0.0
+    remaining = 0.0
+    sold_value = 0.0
+    partial_done = False
     high_close_since_entry = np.nan
     trades = []
+    executions = []
     curve = []
+    last_i = None
+    exit_method_ha = "Forces HA + HA rossa + trailing 5%"
+    exit_method_e2 = "Forces ↓2 o zero (E2)"
+    exit_method_e5 = "50% ↓2 + 50% zero (E5)"
     for i in range(201,n):
         if df.index[i] < beginning or df.index[i] > finish:
             continue
-        previous = i - 1
+        last_i = i
+        prev = i-1
         exited = False
-        forces_exit = np.isfinite(exit_force[previous]) and exit_force[previous] <= 0
-        supertrend_exit = np.isfinite(st_bull[previous]) and st_bull[previous] == 0.0
-        ha_confirmation = (np.isfinite(ha_force_exit[previous])
-                           and ha_force_exit[previous] <= 0 and not ha[previous])
-        # Trailing sul massimo CLOSE del trade, NON sugli high e NON stop intraday.
-        trail5 = (np.isfinite(high_close_since_entry) and position
-                  and high_close_since_entry > entry_price
-                  and (high_close_since_entry - closes[previous]) / entry_price >= 0.05)
-        if exit_method == "Forces 10/4":
-            should_exit = forces_exit
-        elif exit_method == "Supertrend 10x2":
-            should_exit = supertrend_exit
-        else:
-            should_exit = ha_confirmation or trail5
-        if position and should_exit:
-            sell = opens[i] * (1 - 0.0015)
-            ret = sell / entry_price - 1
-            equity *= 1 + ret
-            trades.append({
-                "Ingresso": df.index[entry_idx],
-                "Uscita": df.index[i],
-                "Prezzo ingresso": entry_price,
-                "Prezzo uscita": sell,
-                "Rendimento netto %": ret*100,
-                "Sedute": i - entry_idx,
-            })
-            position = False
-            exited = True
-        entry_signal = (ha[previous] and np.isfinite(entry_force[previous])
-                        and np.isfinite(entry_force[previous-1])
-                        and entry_force[previous] > 0 and entry_force[previous-1] <= 0
-                        and closes[previous] > ema200[previous])
+        forces_zero = (np.isfinite(std_force_exit[prev]) and
+                       std_force_exit[prev] <= 0)
+        fade_two = (prev>=2 and np.isfinite(std_force_exit[prev-2:prev+1]).all()
+                    and std_force_exit[prev] > 0
+                    and std_force_exit[prev-2] > std_force_exit[prev-1] >
+                        std_force_exit[prev])
+        if position:
+            do_full = False
+            do_half = False
+            if exit_method == "Forces 10/4":
+                do_full = forces_zero
+            elif exit_method == "Supertrend 10x2":
+                do_full = np.isfinite(st_bull[prev]) and st_bull[prev] == 0.0
+            elif exit_method == exit_method_ha:
+                ha_confirmation = (np.isfinite(ha_force_exit[prev])
+                                   and ha_force_exit[prev] <= 0
+                                   and not bool(ha[prev]))
+                trail5 = (np.isfinite(high_close_since_entry)
+                          and high_close_since_entry > entry_price
+                          and (high_close_since_entry-closes[prev])/entry_price >= .05)
+                do_full = ha_confirmation or trail5
+            elif exit_method == exit_method_e2:
+                do_full = forces_zero or fade_two
+            else:
+                do_full = forces_zero
+                do_half = fade_two and not partial_done and not do_full
+
+            if do_half:
+                sell = opens[i]*(1-.0015)
+                # Metà della QUANTITÀ iniziale e commissione proporzionale;
+                # metà del capitale resta liquida e non viene reinvestita.
+                sold_value += .5*sell/entry_price
+                remaining = .5
+                partial_done = True
+                executions.append({"Ingresso":df.index[entry_idx],
+                                   "Data":df.index[i], "Preset":code,
+                                   "Uscita":exit_method, "Frazione venduta":.5,
+                                   "Prezzo":sell, "Motivo":"Forces in calo 2 barre"})
+            if do_full:
+                sell = opens[i]*(1-.0015)
+                fraction = remaining
+                sold_value += fraction*sell/entry_price
+                remaining = 0.0
+                new_equity = trade_capital*sold_value
+                trades.append({
+                    "Ingresso": df.index[entry_idx], "Uscita":df.index[i],
+                    "Prezzo ingresso":entry_price, "Prezzo uscita":sell,
+                    "Rendimento netto %":(sold_value-1)*100,
+                    "Sedute":i-entry_idx,
+                    "Prelievo parziale":partial_done,
+                })
+                executions.append({"Ingresso":df.index[entry_idx],
+                                   "Data":df.index[i], "Preset":code,
+                                   "Uscita":exit_method, "Frazione venduta":fraction,
+                                   "Prezzo":sell, "Motivo":"Chiusura finale"})
+                equity = new_equity
+                position = False
+                exited = True
+
+        entry_signal = (bool(ha[prev]) and np.isfinite(entry_force[prev])
+                        and np.isfinite(entry_force[prev-1])
+                        and entry_force[prev] > 0 and entry_force[prev-1] <= 0
+                        and closes[prev] > ema200[prev])
         if not position and not exited and entry_signal:
-            entry_price = opens[i] * (1 + 0.0015)
+            entry_price = opens[i]*(1+.0015)
             entry_idx = i
+            trade_capital = equity
+            sold_value = 0.0
+            remaining = 1.0
+            partial_done = False
             position = True
             high_close_since_entry = closes[i]
         if position:
-            high_close_since_entry = max(high_close_since_entry, closes[i])
-        marked = equity * (closes[i] * (1-0.0015) / entry_price) if position else equity
-        top = max(top, marked)
-        worst_dd = min(worst_dd, marked/top-1)
-        curve.append({"Data":df.index[i], "Equity":marked})
-    result_equity = equity
-    last_index = next((i for i in range(n-1,200,-1)
-                       if beginning <= df.index[i] <= finish), None)
-    if last_index is None:
-        raise ValueError("Il periodo selezionato non ha sedute sufficienti.")
-    marked_last = (result_equity * closes[last_index] * (1-0.0015) / entry_price
-                   if position else result_equity)
-    ret = [t["Rendimento netto %"] for t in trades]
+            high_close_since_entry = max(high_close_since_entry,closes[i])
+            marked = trade_capital*(sold_value+remaining*closes[i]*(1-.0015)/entry_price)
+        else:
+            marked = equity
+        peak = max(peak,marked)
+        worst_dd = min(worst_dd,marked/peak-1)
+        curve.append({"Data":df.index[i],"Equity":marked})
+    if last_i is None:
+        raise ValueError("Nessuna barra utile nel periodo selezionato.")
+    marked_last = (trade_capital*(sold_value+remaining*closes[last_i]*(1-.0015)/entry_price)
+                   if position else equity)
+    returns = [t["Rendimento netto %"] for t in trades]
     return {
-        "Preset": code, "ID": preset_id(code, exit_method), "Descrizione": PRESET_DESCRIPTIONS[code]+"; uscita "+exit_method,
-        "Uscita": exit_method,
-        "Trade chiusi": len(trades),
-        "Vincenti %": 100*sum(x>0 for x in ret)/len(ret) if ret else np.nan,
-        "Durata media": float(np.mean([t["Sedute"] for t in trades])) if trades else np.nan,
-        "Rendimento realizzato %": 100*(result_equity-1),
-        "Rendimento con aperta %": 100*(marked_last-1),
-        "Drawdown massimo %": 100*worst_dd,
-        "Posizione aperta": position,
-        "Operazioni": pd.DataFrame(trades),
-        "Equity": pd.DataFrame(curve),
+        "Preset":code, "ID":preset_id(code,exit_method),
+        "Descrizione":PRESET_DESCRIPTIONS[code]+"; uscita "+exit_method,
+        "Uscita":exit_method,
+        "Trade chiusi":len(trades),
+        "Vincenti %":100*sum(v>0 for v in returns)/len(returns) if returns else np.nan,
+        "Durata media":float(np.mean([t["Sedute"] for t in trades])) if trades else np.nan,
+        "Rendimento realizzato %":100*(equity-1),
+        "Rendimento con aperta %":100*(marked_last-1),
+        "Drawdown massimo %":100*worst_dd,
+        "Posizione aperta":position,
+        "Posizione residua %":100*remaining if position else 0.0,
+        "Operazioni":pd.DataFrame(trades),
+        "Esecuzioni":pd.DataFrame(executions),
+        "Equity":pd.DataFrame(curve),
     }
