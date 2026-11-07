@@ -1,5 +1,35 @@
 # G. Trend Lab
 
+## Preset di ricerca A/B/C (protocollo 07/11/2026)
+
+Nuova sezione separata **Preset A/B/C**; dopo il caricamento dei dati usare
+"Esegui confronto A/B/C". Non modifica le impostazioni dello Screener,
+Backtest o Confronto preesistenti.
+
+- **A**: Forces 7/7 su candele Standard in ingresso; Forces 10/4 Standard in uscita.
+- **B**: Forces 7/7 su Heikin Ashi in ingresso; Forces 10/4 Standard in uscita.
+- **C**: Forces 7/7 Standard in ingresso; Forces 10/4 Heikin Ashi in uscita.
+
+Ingresso: la candela di segnale è HA verde, Forces ingresso passa da <=0 a >0,
+il close Standard è sopra EMA200 (Standard). Si compra all'open successivo.
+Uscita: Forces uscita <= 0 alla chiusura; vendita all'open successivo.
+
+Costi fissi per confronto: 0,15% per lato (commissioni + slippage ipotizzati),
+una posizione alla volta per titolo, senza stop/target/trailing, nessun
+rientro sulla stessa apertura di uscita. Solo Daily e modello percentuale
+azionario; per futures occorrono valori punto, rollover e costi diversi.
+I risultati di operazioni chiuse e le posizioni aperte sono separati.
+I CSV conservano ID stabili dei preset. Per riproducibilità lo storico
+deve contenere almeno 220 barre complete prima di iniziare il test.
+
+**Attenzione**: il modello è di ricerca e non costituisce un edge validato.
+Usare OHLC Standard non rettificati/aggiustati coerentemente al confronto,
+controllare dividendi e corporate action, confrontare barra-per-barra con
+TradingView e misurare i nuovi segnali senza ottimizzazioni retroattive.
+I valori storici calcolati nel dialogo con feed TradingView potrebbero
+non coincidere con Yahoo o altri feed.
+
+
 Trasformazione dello screener Heikin Ashi in laboratorio LONG multi-ticker Daily/Weekly.
 Nessuna condizione Balance. Il progetto Balance-Screener rimane separato.
 
