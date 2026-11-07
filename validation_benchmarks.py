@@ -33,6 +33,8 @@ def _metrics(equity, dates, exposure):
         "Calmar": float(calmar) if np.isfinite(calmar) else np.nan,
         "Anni": round(years, 3),
         "Sedute": len(e),
+        "Prima barra effettiva": str(t[0].date()),
+        "Ultima barra effettiva": str(t[-1].date()),
     }
 
 def strategy_metrics(curve):
@@ -58,7 +60,13 @@ def passive_metrics(prices, dates):
     return _metrics(curve, t, np.ones(len(t)))
 
 def matched_benchmark(prices, dates):
+    """SPY su finestra di calendario coincidente, senza riempire festività
+    dei mercati diversi: usa le sue sedute effettive e le dichiara.
+    """
     t = pd.DatetimeIndex(pd.to_datetime(dates))
-    if prices is None or prices.empty or not t.isin(prices.index).all():
+    if prices is None or prices.empty:
         return None
-    return passive_metrics(prices, t)
+    same_window = prices.loc[(prices.index >= t[0]) & (prices.index <= t[-1])]
+    if len(same_window) < 2:
+        return None
+    return passive_metrics(same_window, same_window.index)
