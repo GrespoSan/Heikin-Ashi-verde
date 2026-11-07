@@ -1,5 +1,26 @@
 # G. Trend Lab
 
+## Audit ingresso Forces — ablazioni isolate (07/11/2026)
+
+**Sorgente verificato:** `research_presets.py`, protocollo `AB-FIVE-EXITS-2026-11-07-v4`. I preset A e B differiscono soltanto per la sorgente del Forces **all'ingresso**: A Standard 7/7, B Heikin Ashi 7/7. Entrambi richiedono HA verde e close Standard sopra EMA200 e un attraversamento Forces da <=0 a >0. Fill alla barra successiva.
+
+**Scostamento descrittivo importante:** l'uscita del motore congelato `Supertrend 10x2` verifica semplicemente `st_bull[prev] == 0`, non il cambio di regime bullish→bearish in quella barra. Le ablazioni replicano volutamente la **logica realmente testata**, e non modificano i risultati storici.
+
+Nuovo pannello `Ablazione ingressi` — 5 strategie fisse:
+
+- B completo, riferimento
+- B senza candela HA verde
+- B senza filtro EMA200
+- B con Forces positivo al posto di crossing dello zero
+- A completo (Forces Standard 7/7, resto identico)
+
+Uscita unica: Supertrend ATR10×2, vendita al successivo open, costi 0,15% per lato. Motore separato: `entry_ablation.py`. Ogni simbolo deve superare il confronto automatico con `simulate_preset(..., "B", ..., "Supertrend 10x2")`, per rendimento mark-to-market, massimo drawdown e numero di trade chiusi. In caso di mancata equivalenza, il simbolo è escluso: nessun fallback.
+
+Metriche per ticker/variante: rendimento, CAGR, drawdown giornaliero mark-to-market, esposizione media, Calmar, numero di ingressi, trade chiusi, lato di turnover indicativo e differenze CAGR rispetto a Buy & Hold e SPY con stessa finestra di calendario. **Turnover indicativo per numero di lati non è turnover nozionale monetario**, e il confronto non genera una curva di portafoglio a capitale comune dinamico.
+
+**Validazione:** la nuova scheda è una prova *retrospettiva*, non ancora un walk-forward fuori campione. Storici 2016–2026 e i 19 titoli satellite/growth USA sono già stati osservati. Per produrre nuove ablazioni sono obbligatori OHLC Daily originali; export delle sole operazioni/benchmark non consentono di ricostruire ingressi scartati. Le serie devono usare stessa fonte, rettifiche e quality audit. Universo point-in-time/delistati da verificare.
+
+
 ## Validazione finaliste e azioni satellite (v1.6.0, 07/11/2026)
 
 - La dicitura Forces Standard/HA 3/3 in alto si riferiva esclusivamente a Screener/Backtest manuale: ora l'interfaccia distingue esplicitamente i parametri configurabili da quelli del confronto congelato A/B 7/7.
