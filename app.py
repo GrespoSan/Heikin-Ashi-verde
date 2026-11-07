@@ -92,7 +92,11 @@ with st.sidebar:
         st.caption('Secrets richiesti: ALPACA_API_KEY e ALPACA_SECRET_KEY. Solo dati: nessun ordine viene inviato.')
     list_file=st.file_uploader('Carica lista.txt',type=['txt'])
     defaults='A2A.MI, AMP.MI, CPR.MI, ENEL.MI, ENI.MI, ISP.MI, UCG.MI' if market=='Italia' else 'AAPL, MSFT, SPY' if market=='USA' else 'GC=F, CL=F, HG=F, ZC=F'
-    text=st.text_area('Ticker',value=defaults,help='Una riga per ticker o lista con virgole. Accetta Nome;Ticker. Per Yahoo Italia aggiunge .MI ai simboli senza suffisso. Commodity: simboli Yahoo completi.')
+    satellite_symbols='1ELE ACE ANIM ARIS AVIO BFG BRE CE CEM CIRC DIB DLG ELN FCT GVS IF IP IRE ITW MAIRE MARR MFEB MN OVS PIA PWS RDUE REY SES SFL SGF SL TES TGYM TIP TPRO WBD WIIT ZV'
+    satellite_mode=st.checkbox('Universo storico: 39 azioni satellite Italia',value=False,disabled=market!='Italia',help='Elenco del secondo gruppo G. Screener Trend ITA 2. Non è un universo point-in-time certificato: alcuni simboli potrebbero non essere più negoziati o aver cambiato ticker.')
+    if satellite_mode:
+        st.caption('Preset 39 ticker satellite: usa Yahoo (o CSV con serie affidabili). Alpaca non accetta i simboli .MI. I ticker non disponibili compariranno tra gli esclusi: non sono zeri di rendimento.')
+    text=st.text_area('Ticker',value=satellite_symbols if satellite_mode else defaults,key='ticker_satellite' if satellite_mode else 'ticker_manual',help='Una riga per ticker o lista con virgole. Accetta Nome;Ticker. Per Yahoo Italia aggiunge .MI ai simboli senza suffisso. Commodity: simboli Yahoo completi.')
     imported=st.file_uploader('Serie Daily CSV/JSON',type=['csv','json']) if source=='CSV / JSON' else None
     imported_symbol=st.text_input('Ticker della serie importata','A2A.MI') if source=='CSV / JSON' else ''
     if source=='CSV / JSON':st.caption('CSV: Date, Open, High, Low, Close, Volume opzionale. JSON: bars[] con t,o,h,l,c,v. Indicare un solo simbolo e prezzi standard. Date giornaliere di seduta, non HA.')
