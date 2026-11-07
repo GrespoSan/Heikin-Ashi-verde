@@ -4,6 +4,7 @@ Dopo il caricamento sintetico di barre OHLC, verifica che la sezione
 Confronto uscite produca dieci righe e il registro delle esecuzioni.
 """
 import unittest
+from pathlib import Path
 import numpy as np
 import pandas as pd
 from streamlit.testing.v1 import AppTest
@@ -22,7 +23,7 @@ def sample():
 
 class StreamlitSmokeTest(unittest.TestCase):
     def test_comparison_produces_ten_rows(self):
-        at=AppTest.from_file("app.py",default_timeout=30).run()
+        at=AppTest.from_file(str(Path(__file__).resolve().parents[1]/"app.py"),default_timeout=30).run()
         self.assertEqual(len(at.exception),0)
         at.session_state["lab_data"]={"TEST.MI":sample()}
         at.session_state["lab_data_revision"]="fixture-1"
