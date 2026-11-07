@@ -1,4 +1,4 @@
-"""Preset di ricerca A/B/C: segnali LONG Daily, separati dal motore operativo.
+"""Preset di ricerca A/B: segnali LONG Daily, separati dal motore operativo.
 
 Non contiene ottimizzatori; non modifica screener e backtest esistenti.
 Esegue segnali su chiusure confermate, ordini all'open successivo.
@@ -10,17 +10,15 @@ import numpy as np
 import pandas as pd
 from engine import Indicators, calculate
 
-PRESET_VERSION = "ABC-EXIT-2026-11-07-v2"
-EXIT_METHODS = ("Forces 10/4", "Supertrend 10x2")
+PRESET_VERSION = "AB-THREE-EXITS-2026-11-07-v3"
+EXIT_METHODS = ("Forces 10/4", "Supertrend 10x2", "Forces HA + HA rossa + trailing 5%")
 PRESETS = {
     "A": ("Standard", "Standard"),
     "B": ("Heikin Ashi", "Standard"),
-    "C": ("Standard", "Heikin Ashi"),
 }
 PRESET_DESCRIPTIONS = {
-    "A": "Ingresso Forces 7/7 Standard; uscita Forces 10/4 Standard",
-    "B": "Ingresso Forces 7/7 Heikin Ashi; uscita Forces 10/4 Standard",
-    "C": "Ingresso Forces 7/7 Standard; uscita Forces 10/4 Heikin Ashi",
+    "A": "Ingresso Forces 7/7 Standard",
+    "B": "Ingresso Forces 7/7 Heikin Ashi",
 }
 
 
@@ -33,6 +31,7 @@ def preset_id(code, exit_method="Forces 10/4"):
     obj = {"version": PRESET_VERSION, "code": code, "sources": PRESETS[code],
            "entry": "HA verde + Forces 7/7 crossing up zero + close > EMA200",
            "exit": exit_method, "fees_per_side": 0.0015,
+           "trailing": "peak close from position entry; (peak_close-current_close)/entry_fill >= 5%; confirm next open" if exit_method.endswith("trailing 5%") else None,
            "fill": "next session open", "one_position": True}
     return sha256(json.dumps(obj, sort_keys=True).encode()).hexdigest()[:12]
 
@@ -125,6 +124,7 @@ def simulate_preset(df, features, code, start=None, end=None, exit_method="Force
     entry_force = features[(in_source,7,7)]
     exit_force = features[(out_source,10,4)]
     st_bull = features["supertrend_10x2"]
+    ha_force_exit = features[("Heikin Ashi",10,4)]
     ha = features["ha_green"]
     ema200 = features["ema200"]
     closes = df.close.to_numpy(dtype=float)
@@ -139,6 +139,7 @@ def simulate_preset(df, features, code, start=None, end=None, exit_method="Force
     position = False
     entry_price = np.nan
     entry_idx = -1
+    high_close_since_entry = np.nan
     trades = []
     curve = []
     for i in range(201,n):
@@ -148,7 +149,18 @@ def simulate_preset(df, features, code, start=None, end=None, exit_method="Force
         exited = False
         forces_exit = np.isfinite(exit_force[previous]) and exit_force[previous] <= 0
         supertrend_exit = np.isfinite(st_bull[previous]) and st_bull[previous] == 0.0
-        should_exit = forces_exit if exit_method == "Forces 10/4" else supertrend_exit
+        ha_confirmation = (np.isfinite(ha_force_exit[previous])
+                           and ha_force_exit[previous] <= 0 and not ha[previous])
+        # Trailing sul massimo CLOSE del trade, NON sugli high e NON stop intraday.
+        trail5 = (np.isfinite(high_close_since_entry) and position
+                  and high_close_since_entry > entry_price
+                  and (high_close_since_entry - closes[previous]) / entry_price >= 0.05)
+        if exit_method == "Forces 10/4":
+            should_exit = forces_exit
+        elif exit_method == "Supertrend 10x2":
+            should_exit = supertrend_exit
+        else:
+            should_exit = ha_confirmation or trail5
         if position and should_exit:
             sell = opens[i] * (1 - 0.0015)
             ret = sell / entry_price - 1
@@ -171,6 +183,9 @@ def simulate_preset(df, features, code, start=None, end=None, exit_method="Force
             entry_price = opens[i] * (1 + 0.0015)
             entry_idx = i
             position = True
+            high_close_since_entry = closes[i]
+        if position:
+            high_close_since_entry = max(high_close_since_entry, closes[i])
         marked = equity * (closes[i] * (1-0.0015) / entry_price) if position else equity
         top = max(top, marked)
         worst_dd = min(worst_dd, marked/top-1)
@@ -184,7 +199,7 @@ def simulate_preset(df, features, code, start=None, end=None, exit_method="Force
                    if position else result_equity)
     ret = [t["Rendimento netto %"] for t in trades]
     return {
-        "Preset": code, "ID": preset_id(code, exit_method), "Descrizione": PRESET_DESCRIPTIONS[code] if exit_method == "Forces 10/4" else PRESET_DESCRIPTIONS[code].split("; uscita")[0]+"; uscita Supertrend 10x2",
+        "Preset": code, "ID": preset_id(code, exit_method), "Descrizione": PRESET_DESCRIPTIONS[code]+"; uscita "+exit_method,
         "Uscita": exit_method,
         "Trade chiusi": len(trades),
         "Vincenti %": 100*sum(x>0 for x in ret)/len(ret) if ret else np.nan,
