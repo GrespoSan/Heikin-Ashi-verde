@@ -17,11 +17,12 @@ from engine import Indicators,Rules,MODULES,calculate,evaluate,backtest,parse_sy
 from data_sources import yahoo,alpaca,read_import,completed_bars
 from research_presets import PRESET_VERSION, PRESETS, EXIT_METHODS, PRESET_DESCRIPTIONS, prepare_preset_features, simulate_preset
 from quality_audit import audit_ohlc_bars, quality_overview
+from validation_benchmarks import FINALISTS, strategy_metrics, passive_metrics, matched_benchmark
 st.set_page_config(page_title='G. Trend Lab',page_icon='🧪',layout='wide')
 st.title('G. Trend Lab')
-st.caption('v1.5.1 · Audit OHLC e confronto 2 ingressi × 5 uscite · esclusioni trasparenti')
+st.caption('v1.6.0 · Audit OHLC · confronto uscite · benchmark Buy & Hold e SPY')
 # I risultati sono effimeri e dipendono dallo schema del motore, non solo dai parametri.
-SESSION_SCHEMA = 'trend-lab-results-3'
+SESSION_SCHEMA = 'trend-lab-results-4'
 def compatible_result(value):
     return (isinstance(value,dict) and value.get('schema')==2
         and all(k in value for k in ('stats','trades','equity','period','drawdown','run_config'))
@@ -30,7 +31,7 @@ def compatible_result(value):
         and all(k in value['stats'] for k in ('Peggior trade %','Massimo perdite consecutive')))
 if st.session_state.get('result_session_schema') != SESSION_SCHEMA:
     had_results=st.session_state.get('lab_results') is not None
-    for name in ('lab_results','lab_features','bt_signature','comparison','compare_signature','compare_errors','feature_cache','export_cache'):
+    for name in ('lab_results','lab_features','bt_signature','comparison','compare_signature','compare_errors','feature_cache','export_cache','abc_results'):
         st.session_state.pop(name,None)
     st.session_state.result_session_schema=SESSION_SCHEMA
     if had_results:st.info('App aggiornata: il precedente risultato è stato azzerato. Dati e impostazioni restano disponibili; premi Esegui backtest per ricalcolare.')
@@ -96,7 +97,7 @@ with st.sidebar:
     imported_symbol=st.text_input('Ticker della serie importata','A2A.MI') if source=='CSV / JSON' else ''
     if source=='CSV / JSON':st.caption('CSV: Date, Open, High, Low, Close, Volume opzionale. JSON: bars[] con t,o,h,l,c,v. Indicare un solo simbolo e prezzi standard. Date giornaliere di seduta, non HA.')
     if st.button('Aggiorna dati / svuota cache'):fetch_cached.clear();st.session_state.pop('lab_data',None);st.session_state.pop('lab_results',None)
-    st.divider();st.header('Moduli LONG')
+    st.divider();st.header('Moduli LONG — Screener / Backtest manuale')
     mods=tuple(k for k in MODULES if st.checkbox(MODULES[k],value=k in ('ha','forces_positive'),help=HELP[k],key='mod_'+k))
     fsource=st.selectbox('Candele per Forces',['Standard','Heikin Ashi'],help='Sorgente comune ai tre moduli Forces. HA e Hull rimangono condizioni separate; esecuzioni sempre su prezzi standard.')
     sma=st.number_input('Forces SMA',1,100,3);ema=st.number_input('Forces EMA',1,100,3)
@@ -143,7 +144,7 @@ data_signature=json.dumps(['1.2',source,market,timeframe,str(history_start),adju
 if st.session_state.get('data_signature')!=data_signature:
     st.session_state.pop('lab_data',None);st.session_state.pop('lab_results',None)
 st.session_state.data_signature=data_signature
-st.caption(f"{len(symbols)} ticker · {timeframe} · Forces {fsource} {sma}/{ema} · solo candele chiuse · configurazione {config_id(ind,rules)}")
+st.caption(f"{len(symbols)} ticker · {timeframe} · solo candele chiuse · Screener/Backtest manuale: Forces {fsource} {sma}/{ema} · config. {config_id(ind,rules)}")
 if st.button('Carica dati e aggiorna screener',type='primary'):
     data={};errors=[];notes={};bar=st.progress(0)
     key=secrets_value('ALPACA_API_KEY');secret=secrets_value('ALPACA_SECRET_KEY')
@@ -191,6 +192,7 @@ with st.expander("Qualità dati — titoli esclusi, date e prezzi OHLC anomali",
         st.success("Nessuna barra OHLC anomala rilevata negli storici caricati.")
 section=st.radio('Sezione',['Screener','Backtest','Confronto uscite','Confronto','Dati e metodo'],horizontal=True,key='section')
 if section=='Confronto uscite':
+    st.caption('**Confronto congelato, indipendente dalla barra laterale:** ingresso A Forces Standard 7/7 · ingresso B Forces HA 7/7 · EMA200 · uscite Forces Standard/HA 10/4, Supertrend 10×2, HA + trailing 5%, E2, E5.')
     st.subheader('Confronto uscite — 2 ingressi × 5 uscite')
     st.caption(f'Protocollo {PRESET_VERSION} · Daily LONG · ingresso A Standard 7/7 oppure B Heikin Ashi 7/7 · HA verde + Close sopra EMA 200 · 5 uscite · open successivo · costi 0,15% per lato.')
     st.info('10 combinazioni congelate, non un ottimizzatore. E2: uscita totale dopo due diminuzioni consecutive di Forces Standard 10/4 positivo, oppure allo zero. E5: 50% alla stessa attenuazione, restante 50% allo zero; se arriva allo zero prima, uscita integrale. Le vendite parziali hanno costi proporzionali. Supertrend da confrontare con TradingView.')
@@ -213,6 +215,23 @@ if section=='Confronto uscite':
                 operations_abc=[]
                 executions_abc=[]
                 errors_abc=[]
+                baseline_rows=[]
+                spy_bars=data.get('SPY')
+                spy_error=''
+                if spy_bars is None:
+                    if source == 'CSV / JSON':
+                        spy_error='SPY non disponibile per import singolo CSV/JSON.'
+                    else:
+                        try:
+                            key=secrets_value('ALPACA_API_KEY')
+                            secret=secrets_value('ALPACA_SECRET_KEY')
+                            raw_spy=fetch_cached('SPY',str(history_start),str(TODAY+timedelta(days=1)),source,adjustment,feed,key,secret,hashlib.sha256(key.encode()).hexdigest()[:12],repair_ohlc)
+                            spy_bars,_=completed_bars(raw_spy,'SPY','USA','Daily',repair=repair_ohlc)
+                            if audit_ohlc_bars(spy_bars,'SPY',origin_label):
+                                raise ValueError('Barre SPY anomale')
+                        except Exception:
+                            spy_bars=None
+                            spy_error='SPY non recuperabile con la fonte/feed corrente: benchmark SPY N/D; nessun fallback silenzioso.'
                 for symbol,frame in data.items():
                     try:
                         anomalies=audit_ohlc_bars(frame,symbol,origin_label)
@@ -225,6 +244,20 @@ if section=='Confronto uscite':
                         for preset in PRESETS:
                             for exit_method in EXIT_METHODS:
                                 res=simulate_preset(frame,f,preset,period_from,period_to,exit_method=exit_method)
+                                if exit_method in FINALISTS:
+                                    eq=res['Equity']
+                                    dates=pd.DatetimeIndex(pd.to_datetime(eq['Data']))
+                                    baselines=[
+                                        ('Strategia',strategy_metrics(eq)),
+                                        ('Buy & Hold',passive_metrics(frame,dates)),
+                                    ]
+                                    spy_metric=matched_benchmark(spy_bars,dates)
+                                    if spy_metric is not None:
+                                        baselines.append(('SPY Buy & Hold',spy_metric))
+                                    for kind,metric in baselines:
+                                        baseline_rows.append({'Ticker':symbol,'Preset':preset,'Uscita':exit_method,'Metodo':kind,
+                                                            'Inizio':str(dates[0].date()),'Fine':str(dates[-1].date()),
+                                                            **metric})
                                 rows_abc.append({k:v for k,v in res.items() if k not in ('Operazioni','Esecuzioni','Equity')}|{'Ticker':symbol,'Prima seduta dati':str(frame.index[0].date()),'Ultima seduta dati':str(frame.index[-1].date()),'Impronta OHLC':quality_table.loc[quality_table.Ticker==symbol,'Impronta OHLC'].iloc[0],'Origine dati':origin_label})
                                 if not res['Operazioni'].empty:
                                     tx=res['Operazioni'].copy()
@@ -238,7 +271,7 @@ if section=='Confronto uscite':
                                     executions_abc.append(fills)
                     except Exception as exc:
                         errors_abc.append({'Ticker':symbol,'Errore':str(exc)})
-                st.session_state.abc_results={'rows':rows_abc,'trades':pd.concat(operations_abc,ignore_index=True) if operations_abc else pd.DataFrame(),'fills':pd.concat(executions_abc,ignore_index=True) if executions_abc else pd.DataFrame(),'errors':errors_abc,'periodo':(str(period_from),str(period_to)),'revision':revision,'protocol':PRESET_VERSION}
+                st.session_state.abc_results={'rows':rows_abc,'trades':pd.concat(operations_abc,ignore_index=True) if operations_abc else pd.DataFrame(),'fills':pd.concat(executions_abc,ignore_index=True) if executions_abc else pd.DataFrame(),'errors':errors_abc,'benchmarks':pd.DataFrame(baseline_rows),'spy_error':spy_error,'periodo':(str(period_from),str(period_to)),'revision':revision,'protocol':PRESET_VERSION}
             abc=st.session_state.get('abc_results')
             if abc:
                 if abc['revision']!=revision or abc['periodo']!=(str(period_from),str(period_to)) or abc.get('protocol')!=PRESET_VERSION:
@@ -252,6 +285,22 @@ if section=='Confronto uscite':
                             st.download_button('Scarica operazioni per uscita CSV',csv_bytes(abc['trades']),'trend_lab_operazioni_per_uscita.csv','text/csv')
                         if not abc['fills'].empty:
                             st.download_button('Scarica tutte le esecuzioni, incluse le vendite 50%',csv_bytes(abc['fills']),'trend_lab_esecuzioni_parziali.csv','text/csv')
+                        if 'benchmarks' in abc and not abc['benchmarks'].empty:
+                            st.subheader('Validazione preliminare — due finaliste contro Buy & Hold e SPY')
+                            st.caption('Confronto per ticker e identica finestra: rendimento con posizioni aperte valorizzate, CAGR, drawdown close-to-close, quota media investita e Calmar = CAGR/|drawdown|. Costi 0,15% per lato; benchmark passivo comprato al primo open e valutato all’ultimo close. Fonte e rettifiche identiche quando SPY è disponibile. Non è test out-of-sample.')
+                            bb=abc['benchmarks'].copy()
+                            st.dataframe(bb,hide_index=True,width='stretch')
+                            st.download_button('Scarica confronto finaliste e benchmark CSV',csv_bytes(bb),'trend_lab_finaliste_benchmark.csv','text/csv',key='benchmarks_export')
+                            pivot=bb.pivot_table(index=['Ticker','Preset','Uscita'],columns='Metodo',values='CAGR %',aggfunc='first')
+                            if 'Strategia' in pivot.columns:
+                                piv=pivot.copy()
+                                for ref in ('Buy & Hold','SPY Buy & Hold'):
+                                    if ref in piv.columns:
+                                        piv['Vantaggio CAGR vs '+ref+' (pp)']=piv['Strategia']-piv[ref]
+                                st.caption('Vantaggio CAGR: punti percentuali fra CAGR della strategia e benchmark, non extra-rendimento di un portafoglio.')
+                                st.dataframe(piv.reset_index(),hide_index=True,width='stretch')
+                            if abc.get('spy_error'):st.warning(abc['spy_error'])
+                            st.warning('Universo corrente non point-in-time: possibili survivorship bias e ticker delistati assenti. Per Italia e SPY in USD, il confronto percentuale NON include rischio EUR/USD. Confronto da confermare su universo storico e dati indipendenti.')
                         st.caption('E5 non è un’uscita completa al primo segnale: metà resta investita. Risultati storici esplorativi; il precedente +57,7% B3 non è confermato automaticamente. Posizioni aperte e dividendi richiedono verifica.')
                     if abc['errors']:
                         st.warning(f"{len(abc['errors'])} titoli esclusi dal confronto; i relativi risultati NON sono considerati.")
