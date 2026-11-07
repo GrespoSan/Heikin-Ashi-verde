@@ -10,7 +10,8 @@ import numpy as np
 import pandas as pd
 from engine import Indicators, calculate
 
-PRESET_VERSION = "ABC-2026-11-07-v1"
+PRESET_VERSION = "ABC-EXIT-2026-11-07-v2"
+EXIT_METHODS = ("Forces 10/4", "Supertrend 10x2")
 PRESETS = {
     "A": ("Standard", "Standard"),
     "B": ("Heikin Ashi", "Standard"),
@@ -23,16 +24,63 @@ PRESET_DESCRIPTIONS = {
 }
 
 
-def preset_id(code):
+def preset_id(code, exit_method="Forces 10/4"):
     """ID stabile che descrive anche i costi e la regola di entrata."""
     if code not in PRESETS:
         raise ValueError("Preset sconosciuto")
+    if exit_method not in EXIT_METHODS:
+        raise ValueError("Uscita sconosciuta")
     obj = {"version": PRESET_VERSION, "code": code, "sources": PRESETS[code],
            "entry": "HA verde + Forces 7/7 crossing up zero + close > EMA200",
-           "exit": "Forces 10/4 <= 0", "fees_per_side": 0.0015,
+           "exit": exit_method, "fees_per_side": 0.0015,
            "fill": "next session open", "one_position": True}
     return sha256(json.dumps(obj, sort_keys=True).encode()).hexdigest()[:12]
 
+
+
+def supertrend_10x2(df):
+    """Supertrend con ATR Wilder(10), fattore 2, su OHLC Standard.
+
+    Bande finali e inversioni basate sulle bande della barra precedente,
+    coerentemente con la ricorrenza TradingView; primo ATR inizializzato
+    alla SMA dei true ranges. I risultati richiedono confronto con TV.
+    True = regime rialzista; False = ribassista; NaN prima del warmup.
+    """
+    n = len(df)
+    high=df.high.to_numpy(dtype=float)
+    low=df.low.to_numpy(dtype=float)
+    close=df.close.to_numpy(dtype=float)
+    tr=np.empty(n)
+    tr[0]=high[0]-low[0]
+    for i in range(1,n):
+        tr[i]=max(high[i]-low[i],abs(high[i]-close[i-1]),abs(low[i]-close[i-1]))
+    atr=np.full(n,np.nan)
+    if n<10:
+        return np.full(n,np.nan)
+    atr[9]=float(np.mean(tr[:10]))
+    for i in range(10,n):
+        atr[i]=(atr[i-1]*9+tr[i])/10
+    upper=np.full(n,np.nan)
+    lower=np.full(n,np.nan)
+    bullish=np.full(n,np.nan)
+    for i in range(9,n):
+        mid=(high[i]+low[i])/2
+        basic_upper=mid+2*atr[i]
+        basic_lower=mid-2*atr[i]
+        if i==9:
+            upper[i]=basic_upper
+            lower[i]=basic_lower
+            bullish[i]=1.0  # seme del regime: da confrontare con ta.supertrend
+            continue
+        upper[i]=(basic_upper if basic_upper<upper[i-1] or close[i-1]>upper[i-1]
+                  else upper[i-1])
+        lower[i]=(basic_lower if basic_lower>lower[i-1] or close[i-1]<lower[i-1]
+                  else lower[i-1])
+        if bullish[i-1]==1.0:
+            bullish[i]=0.0 if close[i]<lower[i-1] else 1.0
+        else:
+            bullish[i]=1.0 if close[i]>upper[i-1] else 0.0
+    return bullish
 
 def prepare_preset_features(df):
     """Le serie devono contenere OHLC STANDARD, mai prezzi HA importati.
@@ -59,10 +107,11 @@ def prepare_preset_features(df):
             if source == "Standard" and sma == 7:
                 result["ha_green"] = x.ha.to_numpy(dtype=bool)
                 result["ema200"] = x.price_ema.to_numpy(dtype=float)
+    result["supertrend_10x2"] = supertrend_10x2(df)
     return result
 
 
-def simulate_preset(df, features, code, start=None, end=None):
+def simulate_preset(df, features, code, start=None, end=None, exit_method="Forces 10/4"):
     """Costo 0,15% lato acquisto e vendita, composto, capitale teorico intero.
 
     La posizione aperta è riportata separatamente (mark-to-market), non come trade
@@ -70,9 +119,12 @@ def simulate_preset(df, features, code, start=None, end=None):
     """
     if code not in PRESETS:
         raise ValueError("Preset sconosciuto")
+    if exit_method not in EXIT_METHODS:
+        raise ValueError("Uscita sconosciuta")
     in_source, out_source = PRESETS[code]
     entry_force = features[(in_source,7,7)]
     exit_force = features[(out_source,10,4)]
+    st_bull = features["supertrend_10x2"]
     ha = features["ha_green"]
     ema200 = features["ema200"]
     closes = df.close.to_numpy(dtype=float)
@@ -94,7 +146,10 @@ def simulate_preset(df, features, code, start=None, end=None):
             continue
         previous = i - 1
         exited = False
-        if position and np.isfinite(exit_force[previous]) and exit_force[previous] <= 0:
+        forces_exit = np.isfinite(exit_force[previous]) and exit_force[previous] <= 0
+        supertrend_exit = np.isfinite(st_bull[previous]) and st_bull[previous] == 0.0
+        should_exit = forces_exit if exit_method == "Forces 10/4" else supertrend_exit
+        if position and should_exit:
             sell = opens[i] * (1 - 0.0015)
             ret = sell / entry_price - 1
             equity *= 1 + ret
@@ -129,7 +184,8 @@ def simulate_preset(df, features, code, start=None, end=None):
                    if position else result_equity)
     ret = [t["Rendimento netto %"] for t in trades]
     return {
-        "Preset": code, "ID": preset_id(code), "Descrizione": PRESET_DESCRIPTIONS[code],
+        "Preset": code, "ID": preset_id(code, exit_method), "Descrizione": PRESET_DESCRIPTIONS[code],
+        "Uscita": exit_method,
         "Trade chiusi": len(trades),
         "Vincenti %": 100*sum(x>0 for x in ret)/len(ret) if ret else np.nan,
         "Durata media": float(np.mean([t["Sedute"] for t in trades])) if trades else np.nan,
