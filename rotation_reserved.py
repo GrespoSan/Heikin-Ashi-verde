@@ -1,11 +1,12 @@
 """Rotazione LONG con massimo 1/2/3 posizioni e quote riservate.
 
 B + Supertrend 10x2 congelati. Segnali soltanto a barra chiusa (t-1),
-esecuzioni alla successiva apertura del rispettivo titolo (t).\nValore azioni al close con costo ipotetico di liquidazione per coerenza\ncon la curva del preset congelato.
+esecuzioni alla successiva apertura del rispettivo titolo (t).
+Valore azioni al close con costo ipotetico di liquidazione per coerenza
+con la curva del preset congelato.
 Ogni slot riceve capitale iniziale / max_posizioni; il ricavato resta
 nello slot per l'ingresso successivo. No cassa condivisa, leva o FX.
 """
-from hashlib import sha256
 import numpy as np
 import pandas as pd
 from research_presets import prepare_preset_features
