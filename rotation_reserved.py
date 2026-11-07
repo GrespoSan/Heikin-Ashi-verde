@@ -99,6 +99,7 @@ def rotate_reserved(data,start,end,capital=10000.,max_positions=1,
     missed_count=0
     for day in days:
         just_exited=set()
+        exited_tickers=set()
         # Prima aggiorna le uscite di tutte le posizioni aperte.
         for slot in slots:
             symbol=slot["symbol"]
@@ -121,6 +122,7 @@ def rotate_reserved(data,start,end,capital=10000.,max_positions=1,
                     slot["last_close"]=None
                     slot["last_date"]=None
                     just_exited.add(slot["id"])
+                    exited_tickers.add(symbol)
                 else:
                     slot["last_close"]=float(bars.close.iloc[i])
                     slot["last_date"]=day
@@ -131,7 +133,7 @@ def rotate_reserved(data,start,end,capital=10000.,max_positions=1,
         held={slot["symbol"] for slot in slots if slot["symbol"] is not None}
         candidates=[]
         for symbol, info in universe.items():
-            if symbol in held:
+            if symbol in held or symbol in exited_tickers:
                 continue
             i=info["positions"].get(day)
             if i is None or i<201:
