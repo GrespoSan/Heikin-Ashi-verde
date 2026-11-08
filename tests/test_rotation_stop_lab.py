@@ -47,3 +47,32 @@ def test_stop_gap_is_filled_at_open_not_the_threshold():
     if not fills.empty:
         np.testing.assert_allclose(fills["Costo"],fills["Nozionale"]*.0015)
         assert (fills["Prezzo open"]>0).all()
+
+def test_immediate_stop_entry_day_with_down_tick_and_costs():
+    # Confronto con asset sintetico: minimo della seduta di ingresso
+    # effettivamente sotto l'open; verifica senza lookahead.
+    df=bars()
+    r=rotate_reserved({"A":df},df.index[225],df.index[-1],10000,1,
+                      RANKING_METHODS[0],stop_mode=STOP_MODES[-1])
+    buys=r["fills"].loc[r["fills"].Lato=="BUY"]
+    sells=r["fills"].loc[r["fills"].Motivo=="Stop seduta ingresso"]
+    assert len(buys)>0, "Fixture non produce alcun ingresso"
+    assert len(sells)>0, "Fixture non produce nessuno stop immediato"
+    for _,sell in sells.iterrows():
+        matches=buys.loc[(buys.Data==sell.Data)&(buys.Ticker==sell.Ticker)]
+        assert len(matches)==1
+        buy=matches.iloc[0]
+        assert abs(sell["Prezzo open"]-buy["Prezzo open"])<1e-9
+        assert sell["Costo"]>0 and buy["Costo"]>0
+
+def test_immediate_stop_matches_original_on_baseline():
+    x=bars()
+    for cap in (1,2,3):
+        baseline=rotate_reserved({"A":x},x.index[230],x.index[-1],10000,cap,
+                                RANKING_METHODS[0],stop_mode=STOP_MODES[0])
+        alt=rotate_reserved({"A":x},x.index[230],x.index[-1],10000,cap,
+                           RANKING_METHODS[0],stop_mode=STOP_MODES[-1])
+        assert alt["metrics"]["Stop"]==STOP_MODES[-1]
+        assert baseline["metrics"]["Stop"]==STOP_MODES[0]
+        assert alt["metrics"]["Uscite stop"]>=0
+        assert (alt["curve"]["Posizioni aperte"]<=cap).all()
