@@ -12,7 +12,7 @@ import pandas as pd
 from research_presets import prepare_preset_features
 from portfolio_validation import _risk, FEE
 
-ROTATION_VERSION = "ROTATION-STOP-LAB-2026-11-08-v1"
+ROTATION_VERSION = "ROTATION-STOP-LAB-2026-11-08-v2"
 RANKING_METHODS = ("Ticker alfabetico (baseline deterministica)",
                    "Momentum 63 sedute alla chiusura precedente")
 MAX_STALE_CALENDAR_DAYS = 10
@@ -24,6 +24,7 @@ STOP_MODES = (
     "Stop 8% + BE +3%",
     "Stop 8% + BE +5%",
     "Stop 5% + BE +3%",
+    "Stop immediato al prezzo ingresso (100%)",
 )
 
 def _atr14(bars):
@@ -51,6 +52,7 @@ def _stop_parameters(mode, entry_open, atr_signal):
     if mode==STOP_MODES[4]:return entry_open*.92,.03
     if mode==STOP_MODES[5]:return entry_open*.92,.05
     if mode==STOP_MODES[6]:return entry_open*.95,.03
+    if mode==STOP_MODES[7]:return entry_open,None
     raise ValueError("Stop sconosciuto")
 
 
@@ -241,10 +243,14 @@ def rotate_reserved(data,start,end,capital=10000.,max_positions=1,
             fills.append({"Data":day,"Segnale":bars.index[i-1],
                           "Slot":slot["id"],"Ticker":symbol,"Lato":"BUY",
                           "Prezzo open":px,"Quantita":qty,"Nozionale":notional,"Costo":fee,"Motivo":"Ingresso B"})
-            # Initial protective stop may execute on the entry day.
+            # Initial protective stop may execute on entry day.
+            # For stop at entry price, require Low < Open: Low == Open alone
+            # does not prove a downtick occurred after the entry fill.
             # Break-even trigger from the entry day only applies next session.
             if (slot["stop_base"] is not None
-                and float(bars.low.iloc[i])<=slot["stop_base"]):
+                and (float(bars.low.iloc[i])<slot["stop_base"]
+                     if stop_mode==STOP_MODES[7] else
+                     float(bars.low.iloc[i])<=slot["stop_base"])):
                 stop_px=float(slot["stop_base"])
                 gross_exit=qty*stop_px
                 slot["cash"]+=gross_exit*(1-FEE)
