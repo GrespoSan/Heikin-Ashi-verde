@@ -1,5 +1,15 @@
 # G. Trend Lab
 
+### Ultimo esperimento conclusivo: stop immediato al prezzo d'ingresso (08/11/2026)
+
+In *Studio Stop Loss*, il pulsante **Esegui SOLO confronto stop immediato** produce sei combinazioni: senza stop e con stop fisso immediato al prezzo dell'open d'acquisto, per 1/2/3 quote riservate. Si può ripetere per i due universi (Core/Satellite) e le due priorità (alfabetica/Momentum 63). Confronto indipendente dalle sette configurazioni già simulate; non ricerca un nuovo parametro ottimale.
+
+- Il prezzo di stop coincide esattamente con l'open di acquisto, **non con il pareggio netto**: il costo atteso di un round trip eseguito esattamente allo stesso prezzo è circa **0,30% del capitale impiegato** (0,15% per lato, senza slippage extra).
+- Dalla prima seduta completa successiva all'ingresso, un gap sotto lo stop viene liquidato all'open effettivo; altrimenti si presume esecuzione allo stop se il minimo lo tocca.
+- Nella seduta di acquisto (ingresso all'open), lo stop immediato scatta soltanto se il minimo Daily è **strettamente inferiore** all'open: Low == Open non prova che dopo il fill d'ingresso si sia verificato un movimento contrario.
+- Le barre Daily non riproducono la microstruttura dell'ordine a stop, le commissioni effettive, lo spread, la liquidità e lo slippage. Il confronto serve solo a capire perché *drawdown del portafoglio* e *stop di un singolo trade* siano due misure diverse.
+- **Nessun nuovo studio di stop è previsto dopo questo controllo**: registrare numeri di operazioni stoppate, rendimento, drawdown, Calmar, esposizione e costi; archiviare il progetto senza scegliere la variante dal rendimento più alto.
+
 ## Studio Stop Loss e breakeven — ricerca esplorativa (08/11/2026)
 
 **Obiettivo:** confrontare la rotazione *B completo + Supertrend 10x2 congelato* su 1/2/3 posizioni, con quote riservate e capitale iniziale nominale USD, rispetto a sei protezioni definite prima di vedere i risultati. Non cambia i moduli congelati di ricerca.
