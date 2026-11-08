@@ -1,5 +1,26 @@
 # G. Trend Lab
 
+## Studio Stop Loss e breakeven — ricerca esplorativa (08/11/2026)
+
+**Obiettivo:** confrontare la rotazione *B completo + Supertrend 10x2 congelato* su 1/2/3 posizioni, con quote riservate e capitale iniziale nominale USD, rispetto a sei protezioni definite prima di vedere i risultati. Non cambia i moduli congelati di ricerca.
+
+Sette scenari di uscita/protezione:
+
+1. Nessuno stop aggiuntivo (baseline originale).
+2. Stop fisso −5% dall'open d'ingresso.
+3. Stop fisso −8% dall'open d'ingresso.
+4. Stop pari a 2 × ATR Wilder(14) misurato alla candela di segnale, fissato all'ingresso.
+5. Stop iniziale −8%; passaggio a breakeven netto dopo che il massimo di una candela chiusa raggiunge almeno +3% rispetto all'open d'ingresso.
+6. Stop iniziale −8%; breakeven netto dopo +5%.
+7. Stop iniziale −5%; breakeven netto dopo +3%.
+
+**Esecuzione:** segnale all'ultima candela chiusa, acquisto alla successiva apertura. Se Supertrend è già ribassista, il suo ordine di vendita alla successiva apertura ha precedenza. Altrimenti, se l'apertura è sotto lo stop, esecuzione all'apertura (gap); se il minimo tocca lo stop, esecuzione allo stop. Il breakeven viene attivato soltanto dalla *seduta successiva* a una candela completata il cui massimo ha toccato il trigger (si evita di supporre se High sia stato precedente a Low sul Daily). Il livello di pareggio incorpora 0,15% di costo sia all'ingresso sia all'uscita; un gap può comunque produrre una perdita. Lo stop iniziale può essere colpito anche nella giornata di ingresso. Lo stop non è un ordine realmente trasmesso, ma una simulazione su OHLC Daily; non include slippage aggiuntivo, spread, liquidità e tasse.
+
+Si confrontano 7 varianti × 3 capacità = **21 simulazioni** per un criterio di scelta fissato (priorità alfabetica deterministica oppure momentum 63 sedute), con stesso universo, periodo e fonte dati. La baseline senza stop viene confrontata numericamente con il motore storico; se diverge, il confronto si interrompe. Misure: CAGR, drawdown giornaliero mark-to-market, Calmar, esposizione, costi, turnover, numero di stop, operazioni. Sono disponibili CSV di riepilogo, equity e trade.
+
+**Nessun risultato numerico storico può essere derivato dai soli CSV di trade ed equity già esportati**: occorrono barre complete `Open/High/Low/Close` per tutti i titoli. Dopo aver caricato i dati originali in Streamlit, utilizzare la scheda *Studio Stop Loss* ed esportare il riepilogo. I risultati sono retrospettivi, non out-of-sample; una variante vincente non va adottata senza test indipendenti e costi realistici.
+
+
 ## Rotazione capitale a quote riservate — 1 / 2 / 3 posizioni (v1.8.0, 07/11/2026)
 
 **Scopo**: simula un unico capitale disponibile, per esempio **10.000 USD**, con possibilità di mantenere fino a 1, 2 o 3 posizioni simultanee. Si tratta di un modello alternativo al portafoglio a 19/63 quote fisse: non sommare o confondere i relativi CAGR.
