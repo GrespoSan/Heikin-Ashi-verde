@@ -24,7 +24,7 @@ from rotation_reserved import ROTATION_VERSION, RANKING_METHODS, compare_capacit
 from rotation_stop_lab import STOP_MODES, _prepare as prepare_stop_features, rotate_reserved as rotation_with_stop
 st.set_page_config(page_title='G. Trend Lab',page_icon='🧪',layout='wide')
 st.title('G. Trend Lab')
-st.caption('v1.8.1 · Audit OHLC · rotazione quote riservate · studio stop loss')
+st.caption('v1.8.2 · Audit OHLC · ultimo test breakeven immediato')
 # I risultati sono effimeri e dipendono dallo schema del motore, non solo dai parametri.
 SESSION_SCHEMA = 'trend-lab-results-4'
 def compatible_result(value):
@@ -533,7 +533,7 @@ if section=='Studio Stop Loss':
                 prepared=prepare_stop_features(data)
                 results=[]
                 details={}
-                for stop_mode in STOP_MODES:
+                for stop_mode in STOP_MODES[:-1]:
                     for slots in (1,2,3):
                         r=rotation_with_stop(data,sl_start,sl_end,sl_cap,slots,sl_rank,
                                              _prepared=prepared,stop_mode=stop_mode)
@@ -578,6 +578,64 @@ if section=='Studio Stop Loss':
                     st.warning('Alcuni ticker sono stati esclusi per problemi OHLC o warm-up.')
                     st.dataframe(rr['excluded'],hide_index=True,width='stretch')
                 st.caption('Risultati in-sample esplorativi. Stop fisso non protegge dai gap. Il breakeven netto si attiva solo dopo una candela chiusa che abbia raggiunto il trigger; non assume che High preceda Low nella stessa barra.')
+
+    st.divider()
+    st.subheader('Ultimo controllo — stop immediato a prezzo di ingresso')
+    st.caption('Esperimento conclusivo richiesto: esclusivamente senza stop vs stop = open di acquisto, 1/2/3 posizioni. Nessuna ottimizzazione.')
+    st.warning('Stop esattamente al prezzo pagato: NON pareggio netto. Ogni uscita a questo prezzo perde i costi di entrata e uscita (0,30% complessivo circa). Se nella giornata di ingresso Low < Open, simuliamo lo stop a Open; se Low = Open non assumiamo un tick successivo all’ingresso. Gap sfavorevoli dalle sedute successive eseguiti all’apertura. Un Daily OHLC non prova il percorso intrabar e non quantifica spread/slippage aggiuntivo.')
+    if timeframe=='Daily' and instrument=='Azioni / ETF / spot' and market=='USA':
+        if st.button('Esegui SOLO confronto stop immediato',type='primary',key='sl_immediate_go'):
+            try:
+                if sl_start>=sl_end:
+                    raise ValueError('Intervallo non valido')
+                prepared=prepare_stop_features(data)
+                rows=[]
+                detail={}
+                for s_mode in (STOP_MODES[0],STOP_MODES[-1]):
+                    for n_slots in (1,2,3):
+                        r=rotation_with_stop(data,sl_start,sl_end,sl_cap,n_slots,
+                            sl_rank,_prepared=prepared,stop_mode=s_mode)
+                        if s_mode==STOP_MODES[0]:
+                            ref=original_rotation(data,sl_start,sl_end,sl_cap,n_slots,sl_rank)
+                            if not np.allclose(r['curve']['Patrimonio'].to_numpy(),
+                                                ref['curve']['Patrimonio'].to_numpy(),
+                                                rtol=1e-9,atol=1e-7):
+                                raise AssertionError('Baseline senza stop non coincide con originale')
+                        detail[(s_mode,n_slots)]=r
+                        rows.append(r['metrics'])
+                st.session_state.sl_immediate_results={
+                    'summary':pd.DataFrame(rows),'details':detail,'revision':revision,
+                    'start':str(sl_start),'end':str(sl_end),'capital':sl_cap,'ranking':sl_rank}
+            except Exception as exc:
+                st.error(f'Controllo non completato: {str(exc)[:400]}')
+        immediate=st.session_state.get('sl_immediate_results')
+        if immediate:
+            if (immediate['revision']!=revision or immediate['start']!=str(sl_start)
+                or immediate['end']!=str(sl_end) or immediate['capital']!=sl_cap
+                or immediate['ranking']!=sl_rank):
+                st.warning('I risultati del controllo immediato sono relativi a dati o input precedenti; ripeti il test.')
+            else:
+                imm=immediate['summary']
+                cols=['Stop','Capacita','Capitale finale','CAGR %',
+                      'Drawdown massimo MTM %','Calmar','Esposizione media %',
+                      'Acquisti','Vendite','Uscite stop','Costi totali']
+                st.dataframe(imm[[k for k in cols if k in imm.columns]],hide_index=True,
+                             width='stretch')
+                st.download_button('Scarica confronto immediato CSV',csv_bytes(imm),
+                    'trend_lab_stop_immediato_sintesi.csv', 'text/csv',key='sl_immediate_summary_csv')
+                d1,d2=st.columns(2)
+                v_mode=d1.selectbox('Dettaglio ultimo controllo',
+                        [STOP_MODES[0],STOP_MODES[-1]],key='sl_immediate_mode')
+                v_slots=d2.selectbox('Posizioni', [1,2,3],key='sl_immediate_slots')
+                selected=immediate['details'][(v_mode,v_slots)]
+                st.line_chart(selected['curve'].set_index('Data')[['Patrimonio','Liquidita']])
+                st.download_button('Scarica esecuzioni ultimo controllo',
+                    csv_bytes(selected['fills']),'trend_lab_stop_immediato_trades.csv',
+                    'text/csv',key='sl_immediate_trades_csv')
+                st.download_button('Scarica equity ultimo controllo',
+                    csv_bytes(selected['curve']),'trend_lab_stop_immediato_equity.csv',
+                    'text/csv',key='sl_immediate_equity_csv')
+                st.caption('Test retrospettivo su Daily. Confronto diagnostico sul meccanismo, non strategia pronta all’uso.')
 
 if section=='Screener':
     features={};screen_quality={}
