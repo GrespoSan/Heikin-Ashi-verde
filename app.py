@@ -20,10 +20,11 @@ from quality_audit import audit_ohlc_bars, quality_overview
 from validation_benchmarks import FINALISTS, strategy_metrics, passive_metrics, matched_benchmark
 from entry_ablation import ABLATION_VERSION, VARIANTS, evaluate_ablation_universe
 from portfolio_validation import PORTFOLIO_VERSION, portfolio_lump_sum
-from rotation_reserved import ROTATION_VERSION, RANKING_METHODS, compare_capacities
+from rotation_reserved import ROTATION_VERSION, RANKING_METHODS, compare_capacities, rotate_reserved as original_rotation
+from rotation_stop_lab import STOP_MODES, _prepare as prepare_stop_features, rotate_reserved as rotation_with_stop
 st.set_page_config(page_title='G. Trend Lab',page_icon='🧪',layout='wide')
 st.title('G. Trend Lab')
-st.caption('v1.8.0 · Audit OHLC · portafoglio · rotazione a quote riservate')
+st.caption('v1.8.1 · Audit OHLC · rotazione quote riservate · studio stop loss')
 # I risultati sono effimeri e dipendono dallo schema del motore, non solo dai parametri.
 SESSION_SCHEMA = 'trend-lab-results-4'
 def compatible_result(value):
@@ -197,7 +198,7 @@ with st.expander("Qualità dati — titoli esclusi, date e prezzi OHLC anomali",
         st.download_button('Scarica dettaglio barre anomale CSV',csv_bytes(quality_bars),'trend_lab_barre_ohlc_anomale.csv','text/csv',key='quality_bars_export')
     else:
         st.success("Nessuna barra OHLC anomala rilevata negli storici caricati.")
-section=st.radio('Sezione',['Screener','Backtest','Confronto uscite','Ablazione ingressi','Validazione Portafoglio','Rotazione Capitale','Confronto','Dati e metodo'],horizontal=True,key='section')
+section=st.radio('Sezione',['Screener','Backtest','Confronto uscite','Ablazione ingressi','Validazione Portafoglio','Rotazione Capitale','Studio Stop Loss','Confronto','Dati e metodo'],horizontal=True,key='section')
 if section=='Confronto uscite':
     st.caption('**Confronto congelato, indipendente dalla barra laterale:** ingresso A Forces Standard 7/7 · ingresso B Forces HA 7/7 · EMA200 · uscite Forces Standard/HA 10/4, Supertrend 10×2, HA + trailing 5%, E2, E5.')
     st.subheader('Confronto uscite — 2 ingressi × 5 uscite')
@@ -510,6 +511,73 @@ if section=='Rotazione Capitale':
                     st.dataframe(selected['excluded'],hide_index=True,width='stretch')
                     st.download_button('Scarica esclusi rotazione',csv_bytes(selected['excluded']),'trend_lab_rotazione_esclusi.csv','text/csv',key='rotation_excluded_export')
                 st.caption('Costi: 0,15% per lato. Nessuna leva, finanziamento, imposte, FX, interessi o accredito dividendi. Quote frazionarie; vendita e nuovo acquisto nello stesso giorno su slot diverso sono consentiti, ma lo slot venduto viene riutilizzato soltanto dalla seduta successiva. Non è un test fuori campione né un modello eseguibile automaticamente.')
+
+if section=='Studio Stop Loss':
+    st.subheader('Studio Stop Loss — B + Supertrend 10×2 congelati')
+    st.caption('Verifica esplorativa separata, nessuna modifica alla strategia originale o ai suoi dati storici.')
+    st.info('Entrata: Forces HA 7/7 incrocio zero, HA verde, close sopra EMA200. Uscita base: Supertrend ribassista, ordine al prossimo open. Stop aggiuntivi simulati su OHLC Daily standard con costi 0,15% per lato.')
+    st.warning('STOP INTRADAY: se l’open è sotto lo stop, il fill è all’open (gap); altrimenti se il minimo tocca lo stop, il fill è al livello. Il breakeven scatta soltanto dalla seduta successiva a quella in cui High raggiunge la soglia di profitto. Break-even netto include commissioni ipotetiche; spread/slippage aggiuntivo non sono inclusi. Con barre Daily l’ordine intrabar è ignoto.')
+    if timeframe!='Daily' or instrument!='Azioni / ETF / spot' or market!='USA':
+        st.error('Lo studio richiede azioni USA, Daily e Azioni / ETF / spot.')
+    else:
+        x1,x2=st.columns(2)
+        sl_start=x1.date_input('Inizio studio',value=max(date(2016,10,19),min(v.index[0].date() for v in data.values())),key='sl_start')
+        sl_end=x2.date_input('Fine studio',value=max(v.index[-1].date() for v in data.values()),key='sl_end')
+        sl_cap=st.number_input('Capitale iniziale (USD)',min_value=1000.,value=10000.,step=1000.,key='sl_cap')
+        sl_rank=st.selectbox('Priorità segnali (fissa per tutti gli stop)',options=RANKING_METHODS,index=0,key='sl_rank')
+        st.caption('7 stop predefiniti × 1/2/3 posizioni = 21 scenari a parità di universo, ingresso e graduatoria. Non selezionare vincitori in base al solo CAGR.')
+        if st.button('Esegui confronto stop e breakeven',type='primary',key='sl_go'):
+            try:
+                if sl_start>=sl_end:
+                    raise ValueError('Intervallo non valido')
+                prepared=prepare_stop_features(data)
+                results=[]
+                details={}
+                for stop_mode in STOP_MODES:
+                    for slots in (1,2,3):
+                        r=rotation_with_stop(data,sl_start,sl_end,sl_cap,slots,sl_rank,
+                                             _prepared=prepared,stop_mode=stop_mode)
+                        if stop_mode==STOP_MODES[0]:
+                            original=original_rotation(data,sl_start,sl_end,sl_cap,slots,sl_rank)
+                            if not np.allclose(r['curve']['Patrimonio'].to_numpy(),
+                                               original['curve']['Patrimonio'].to_numpy(),rtol=1e-9,atol=1e-7):
+                                raise AssertionError('Il riferimento senza stop non coincide con la rotazione originale')
+                        details[(stop_mode,slots)]=r
+                        results.append(r['metrics'])
+                st.session_state.stop_lab_results={'results':pd.DataFrame(results),'details':details,
+                    'revision':revision,'start':str(sl_start),'end':str(sl_end),
+                    'capital':sl_cap,'ranking':sl_rank}
+            except Exception as exc:
+                st.error(f'Studio non completato: {str(exc)[:350]}')
+        saved=st.session_state.get('stop_lab_results')
+        if saved:
+            if (saved['revision']!=revision or saved['start']!=str(sl_start)
+                or saved['end']!=str(sl_end) or saved['capital']!=sl_cap
+                or saved['ranking']!=sl_rank):
+                st.warning('Risultati di un input precedente, rieseguire il test.')
+            else:
+                sm=saved['results']
+                st.subheader('Confronto delle 21 configurazioni')
+                columns=['Stop','Capacita','Capitale finale','CAGR %',
+                         'Drawdown massimo MTM %','Esposizione media %',
+                         'Calmar','Acquisti','Vendite','Uscite stop',
+                         'Costi totali','Turnover nozionale','Segnali non eseguiti per capacita']
+                st.dataframe(sm[[k for k in columns if k in sm.columns]],hide_index=True,width='stretch')
+                st.download_button('Scarica confronto stop CSV',csv_bytes(sm),
+                                   'trend_lab_studio_stop_sintesi.csv','text/csv',key='sl_summary_download')
+                d1,d2=st.columns(2)
+                chosen_stop=d1.selectbox('Dettaglio stop',options=STOP_MODES,key='sl_variant')
+                chosen_slots=d2.selectbox('Dettaglio numero posizioni',options=[1,2,3],key='sl_slots')
+                rr=saved['details'][(chosen_stop,chosen_slots)]
+                st.line_chart(rr['curve'].set_index('Data')[['Patrimonio','Liquidita']])
+                st.download_button('Scarica curva giornaliera',csv_bytes(rr['curve']),
+                                   'trend_lab_studio_stop_equity.csv','text/csv',key='sl_equity_download')
+                st.download_button('Scarica esecuzioni',csv_bytes(rr['fills']),
+                                   'trend_lab_studio_stop_esecuzioni.csv','text/csv',key='sl_fills_download')
+                if not rr['excluded'].empty:
+                    st.warning('Alcuni ticker sono stati esclusi per problemi OHLC o warm-up.')
+                    st.dataframe(rr['excluded'],hide_index=True,width='stretch')
+                st.caption('Risultati in-sample esplorativi. Stop fisso non protegge dai gap. Il breakeven netto si attiva solo dopo una candela chiusa che abbia raggiunto il trigger; non assume che High preceda Low nella stessa barra.')
 
 if section=='Screener':
     features={};screen_quality={}
